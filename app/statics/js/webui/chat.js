@@ -723,7 +723,7 @@
     const rid = entry.upstreamResponseId || '';
     if (!rid) {
       toast(text('webui.chat.readAloudUnavailable',
-        'Read-aloud unavailable for this message (only basic Grok models stream a usable upstream id).'),
+        'Read-aloud is only available for grok.com models (e.g. grok-4.20-fast, grok-4.20-0309-non-reasoning). The current message used a console.x.ai route which does not expose an upstream responseId.'),
         'warn');
       return;
     }
