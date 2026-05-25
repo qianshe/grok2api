@@ -698,9 +698,14 @@
   }
 
   let currentReadAudio = null;
+  let currentReadUtter = null;
   let currentReadBtn = null;
 
   function stopCurrentReadAudio() {
+    if (currentReadUtter || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+      try { window.speechSynthesis.cancel(); } catch {}
+      currentReadUtter = null;
+    }
     if (currentReadAudio) {
       try { currentReadAudio.pause(); } catch {}
       try { URL.revokeObjectURL(currentReadAudio.src); } catch {}
@@ -712,57 +717,89 @@
     }
   }
 
+  function stripMarkdownForSpeech(input) {
+    if (!input) return '';
+    let s = String(input);
+    s = s.replace(/```[\s\S]*?```/g, ' ');                 // fenced code blocks
+    s = s.replace(/`([^`]+)`/g, '$1');                     // inline code
+    s = s.replace(/!\[[^\]]*\]\([^)]+\)/g, ' ');           // images
+    s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');         // links → text
+    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');               // bold **
+    s = s.replace(/__([^_]+)__/g, '$1');                   // bold __
+    s = s.replace(/\*([^*]+)\*/g, '$1');                   // italic *
+    s = s.replace(/_([^_]+)_/g, '$1');                     // italic _
+    s = s.replace(/~~([^~]+)~~/g, '$1');                   // strikethrough
+    s = s.replace(/^#{1,6}\s+/gm, '');                     // headers
+    s = s.replace(/^>\s?/gm, '');                          // blockquotes
+    s = s.replace(/^[*\-+]\s+/gm, '');                     // bullet markers
+    s = s.replace(/^\d+\.\s+/gm, '');                      // numbered list markers
+    s = s.replace(/^[-*_]{3,}\s*$/gm, '');                 // horizontal rules
+    s = s.replace(/\|/g, ' ');                             // table pipes
+    s = s.replace(/\n{2,}/g, '\n');                        // collapse blank lines
+    return s.trim();
+  }
+
+  function pickSpeechVoice(lang) {
+    const synth = window.speechSynthesis;
+    if (!synth) return null;
+    const voices = synth.getVoices() || [];
+    const wanted = (lang || '').toLowerCase();
+    if (!wanted) return null;
+    // Prefer voices whose lang starts with the wanted code (e.g. zh-CN matches zh).
+    const exact = voices.find((v) => (v.lang || '').toLowerCase().startsWith(wanted));
+    return exact || null;
+  }
+
   async function toggleReadAloud(entry, btn) {
     if (!entry) return;
-    if (currentReadBtn === btn && currentReadAudio) {
+    if (currentReadBtn === btn) {
       stopCurrentReadAudio();
       return;
     }
     stopCurrentReadAudio();
 
-    const rid = entry.upstreamResponseId || '';
-    if (!rid) {
-      toast(text('webui.chat.readAloudUnavailable',
-        'Read-aloud is only available for grok.com models (e.g. grok-4.20-fast, grok-4.20-0309-non-reasoning). The current message used a console.x.ai route which does not expose an upstream responseId.'),
-        'warn');
+    if (!('speechSynthesis' in window) || typeof window.SpeechSynthesisUtterance !== 'function') {
+      toast(text('webui.chat.readAloudUnsupported',
+        'This browser does not support speech synthesis.'), 'error');
       return;
     }
 
+    const raw = typeof entry.text === 'string' ? entry.text : extractTextContent(entry.text);
+    const cleanText = stripMarkdownForSpeech(raw);
+    if (!cleanText) {
+      toast(text('webui.chat.readAloudEmpty', 'Nothing to read aloud.'), 'warn');
+      return;
+    }
+
+    const utter = new SpeechSynthesisUtterance(cleanText);
+    const looksZh = /[一-鿿]/.test(cleanText);
+    utter.lang = looksZh ? 'zh-CN' : 'en-US';
+    const matchedVoice = pickSpeechVoice(looksZh ? 'zh' : 'en');
+    if (matchedVoice) utter.voice = matchedVoice;
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+
+    utter.onend = () => {
+      if (currentReadBtn === btn) stopCurrentReadAudio();
+    };
+    utter.onerror = (event) => {
+      if (currentReadBtn === btn) stopCurrentReadAudio();
+      const reason = event && event.error ? event.error : 'unknown';
+      // 'canceled' / 'interrupted' fire on normal stop; suppress those.
+      if (reason === 'canceled' || reason === 'interrupted') return;
+      toast(`${text('webui.chat.readAloudFailed', 'Speech synthesis failed')}: ${reason}`, 'error');
+    };
+
     btn.classList.add('playing');
-    setStatus(text('webui.chat.readAloudLoading', 'Fetching audio...'));
+    currentReadBtn = btn;
+    currentReadUtter = utter;
+    setStatus(text('webui.chat.readAloudPlaying', 'Playing audio...'));
     try {
-      const headers = await getAuthHeaders();
-      const params = new URLSearchParams({ voiceId: 'Ara' });
-      if (entry.upstreamConversationId) {
-        params.set('conversationId', entry.upstreamConversationId);
-      }
-      const res = await fetch(`/webui/api/voice/read/${encodeURIComponent(rid)}?${params}`, {
-        method: 'GET',
-        headers,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(body || `HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const audio = new Audio(URL.createObjectURL(blob));
-      currentReadAudio = audio;
-      currentReadBtn = btn;
-      audio.addEventListener('ended', () => {
-        if (currentReadBtn === btn) stopCurrentReadAudio();
-      });
-      audio.addEventListener('error', () => {
-        if (currentReadBtn === btn) stopCurrentReadAudio();
-        toast(text('webui.chat.readAloudFailed', 'Audio playback failed'), 'error');
-      });
-      await audio.play();
-      setStatus(text('webui.chat.readAloudPlaying', 'Playing audio...'));
+      window.speechSynthesis.speak(utter);
     } catch (error) {
-      btn.classList.remove('playing');
-      currentReadBtn = null;
-      currentReadAudio = null;
-      toast(`${text('webui.chat.readAloudFailed', 'Read-aloud failed')}: ${error.message || error}`, 'error');
-      setStatus(text('webui.chat.statusDone', 'Completed'));
+      stopCurrentReadAudio();
+      toast(`${text('webui.chat.readAloudFailed', 'Speech synthesis failed')}: ${error.message || error}`, 'error');
     }
   }
 
