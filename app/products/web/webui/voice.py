@@ -1,6 +1,7 @@
 """Voice token endpoint — LiveKit token acquisition."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Path, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.platform.errors import AppError, RateLimitError, UpstreamError
@@ -31,12 +32,13 @@ async def voice_token(request: VoiceTokenRequest):
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
 
-    # Voice uses auto mode, which is available on super/heavy pools only.
+    # Voice normally requires super/heavy, but we also try basic to surface
+    # any upstream error explicitly instead of pre-rejecting locally.
     from app.control.model.enums import ModeId
 
     ts = now_s()
     acct = await _acct_dir.reserve(
-        pool_candidates=(1, 2),
+        pool_candidates=(0, 1, 2),
         mode_id=int(ModeId.AUTO),
         now_s_override=ts,
     )
@@ -78,3 +80,67 @@ async def voice_token(request: VoiceTokenRequest):
         raise UpstreamError(f"Voice token error: {e}")
     finally:
         await _acct_dir.release(acct)
+
+
+@router.get("/voice/read/{response_id}")
+async def read_response_audio(
+    response_id: str = Path(..., description="Upstream Grok responseId (UUID)"),
+    voice_id: str = Query("Ara", alias="voiceId"),
+    conversation_id: str | None = Query(None, alias="conversationId"),
+    range_header: str | None = Header(None, alias="range"),
+):
+    """Stream TTS audio for an existing Grok response.
+
+    This is a thin proxy to grok.com's read-response-audio-file endpoint.
+    For now the upstream account is picked from any available pool, so
+    this will only succeed if upstream allows cross-session lookups for
+    the given responseId.
+    """
+    from app.dataplane.account import _directory as _acct_dir
+    if _acct_dir is None:
+        raise RateLimitError("Account directory not initialised")
+
+    ts = now_s()
+    acct = await _acct_dir.reserve_any(
+        pool_candidates=(0, 1, 2),
+        now_s_override=ts,
+    )
+    if acct is None:
+        raise RateLimitError("No available tokens for TTS")
+
+    token = acct.token
+    try:
+        from app.dataplane.reverse.transport.tts import fetch_response_audio
+        stream, status, upstream_headers = await fetch_response_audio(
+            token,
+            response_id,
+            voice_id=voice_id,
+            range_header=range_header,
+            conversation_id=conversation_id,
+        )
+    except AppError:
+        await _acct_dir.release(acct)
+        raise
+    except Exception as exc:
+        await _acct_dir.release(acct)
+        raise UpstreamError(f"TTS error: {exc}")
+
+    media_type = upstream_headers.get("Content-Type", "audio/mpeg")
+    passthrough: dict[str, str] = {}
+    for key in ("Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control"):
+        if key in upstream_headers:
+            passthrough[key] = upstream_headers[key]
+
+    async def _wrapper():
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            await _acct_dir.release(acct)
+
+    return StreamingResponse(
+        _wrapper(),
+        status_code=status,
+        media_type=media_type,
+        headers=passthrough,
+    )

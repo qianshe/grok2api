@@ -46,6 +46,9 @@ WS_LIVEKIT = "wss://livekit.grok.com"
 # ── LiveKit ─────────────────────────────────────────────────────────────
 LIVEKIT_TOKENS = f"{BASE}/rest/livekit/tokens"  # POST
 
+# ── TTS (read-response-audio) ───────────────────────────────────────────
+READ_RESPONSE_AUDIO = f"{BASE}/http/app-chat/read-response-audio-file"  # GET /{response_id}?voiceId=X
+
 __all__ = [
     "BASE",
     "ASSETS_CDN",
@@ -66,4 +69,5 @@ __all__ = [
     "WS_IMAGINE",
     "WS_LIVEKIT",
     "LIVEKIT_TOKENS",
+    "READ_RESPONSE_AUDIO",
 ]
