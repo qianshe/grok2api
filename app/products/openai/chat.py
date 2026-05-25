@@ -1148,6 +1148,17 @@ async def completions(
                             sources = adapter.search_sources_list()
                             if sources:
                                 final["search_sources"] = sources
+                            # Surface upstream Grok responseId for TTS read-aloud feature.
+                            if adapter.upstream_response_id:
+                                from app.dataplane.voice import record as _record_voice_session
+                                _record_voice_session(
+                                    adapter.upstream_response_id,
+                                    token,
+                                    conversation_id=adapter.upstream_conversation_id,
+                                )
+                                final["upstream_response_id"] = adapter.upstream_response_id
+                                if adapter.upstream_conversation_id:
+                                    final["upstream_conversation_id"] = adapter.upstream_conversation_id
                             yield f"data: {orjson.dumps(final).decode()}\n\n"
                             yield "data: [DONE]\n\n"
                             success = True
@@ -1342,7 +1353,7 @@ async def completions(
     ct = estimate_tokens(full_text)
     rt = estimate_tokens(thinking_text) if thinking_text else 0
     chat_anns = _to_chat_annotations(adapter.annotations_list())
-    return make_chat_response(
+    response = make_chat_response(
         model,
         full_text,
         prompt_content=message,
@@ -1352,6 +1363,18 @@ async def completions(
         annotations=chat_anns or None,
         usage=build_usage(pt, ct + rt, reasoning_tokens=rt),
     )
+    # Surface upstream Grok responseId for TTS read-aloud feature.
+    if adapter.upstream_response_id:
+        from app.dataplane.voice import record as _record_voice_session
+        _record_voice_session(
+            adapter.upstream_response_id,
+            token,
+            conversation_id=adapter.upstream_conversation_id,
+        )
+        response["upstream_response_id"] = adapter.upstream_response_id
+        if adapter.upstream_conversation_id:
+            response["upstream_conversation_id"] = adapter.upstream_conversation_id
+    return response
 
 
 __all__ = [

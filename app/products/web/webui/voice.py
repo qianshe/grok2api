@@ -91,24 +91,37 @@ async def read_response_audio(
 ):
     """Stream TTS audio for an existing Grok response.
 
-    This is a thin proxy to grok.com's read-response-audio-file endpoint.
-    For now the upstream account is picked from any available pool, so
-    this will only succeed if upstream allows cross-session lookups for
-    the given responseId.
+    Looks up the SSO account that originated *response_id* via the in-memory
+    voice-session store and proxies grok.com's read-response-audio-file with
+    that account's session cookie. Returns 404 if the mapping is missing or
+    expired (TTL ~30 min by default).
     """
     from app.dataplane.account import _directory as _acct_dir
+    from app.dataplane.voice import lookup as _lookup_voice_session
+
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
 
-    ts = now_s()
-    acct = await _acct_dir.reserve_any(
-        pool_candidates=(0, 1, 2),
-        now_s_override=ts,
-    )
-    if acct is None:
-        raise RateLimitError("No available tokens for TTS")
+    mapping = _lookup_voice_session(response_id)
+    if mapping is None:
+        # Fall back to any-account so external callers can still try; if
+        # upstream binds to the originating session this will 403, but the
+        # error chain stays meaningful.
+        ts = now_s()
+        acct = await _acct_dir.reserve_any(
+            pool_candidates=(0, 1, 2),
+            now_s_override=ts,
+        )
+        if acct is None:
+            raise RateLimitError("No available tokens for TTS")
+        token = acct.token
+        mapped_conv_id = ""
+        release_acct = acct
+    else:
+        token, mapped_conv_id = mapping
+        release_acct = None
 
-    token = acct.token
+    effective_conv = conversation_id or mapped_conv_id or None
     try:
         from app.dataplane.reverse.transport.tts import fetch_response_audio
         stream, status, upstream_headers = await fetch_response_audio(
@@ -116,13 +129,15 @@ async def read_response_audio(
             response_id,
             voice_id=voice_id,
             range_header=range_header,
-            conversation_id=conversation_id,
+            conversation_id=effective_conv,
         )
     except AppError:
-        await _acct_dir.release(acct)
+        if release_acct is not None:
+            await _acct_dir.release(release_acct)
         raise
     except Exception as exc:
-        await _acct_dir.release(acct)
+        if release_acct is not None:
+            await _acct_dir.release(release_acct)
         raise UpstreamError(f"TTS error: {exc}")
 
     media_type = upstream_headers.get("Content-Type", "audio/mpeg")
@@ -136,7 +151,8 @@ async def read_response_audio(
             async for chunk in stream:
                 yield chunk
         finally:
-            await _acct_dir.release(acct)
+            if release_acct is not None:
+                await _acct_dir.release(release_acct)
 
     return StreamingResponse(
         _wrapper(),

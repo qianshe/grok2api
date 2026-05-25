@@ -232,6 +232,8 @@ class StreamAdapter:
         "thinking_buf",
         "text_buf",
         "image_urls",
+        "upstream_response_id",
+        "upstream_conversation_id",
     )
 
     def __init__(self) -> None:
@@ -253,6 +255,9 @@ class StreamAdapter:
         self.thinking_buf: list[str] = []
         self.text_buf: list[str] = []
         self.image_urls: list[tuple[str, str]] = []   # [(url, imageUuid), ...]
+        # Upstream Grok IDs captured from SSE — used for TTS read-response-audio.
+        self.upstream_response_id: str = ""
+        self.upstream_conversation_id: str = ""
 
     # 搜索信源追加：当配置启用且有 webSearchResults 时，格式化为 ## Sources 段落
     # 标记行 [grok2api-sources]: # 是 markdown link reference definition，渲染器不显示，
@@ -308,6 +313,17 @@ class StreamAdapter:
         resp = result.get("response")
         if not resp:
             return []
+
+        # Capture upstream Grok IDs (TTS read-response-audio needs these).
+        # They appear at result.conversationId / result.responseId on early frames.
+        if not self.upstream_response_id:
+            rid = result.get("responseId") or resp.get("responseId")
+            if isinstance(rid, str) and rid:
+                self.upstream_response_id = rid
+        if not self.upstream_conversation_id:
+            cid = result.get("conversationId") or resp.get("conversationId")
+            if isinstance(cid, str) and cid:
+                self.upstream_conversation_id = cid
 
         events: list[FrameEvent] = []
 

@@ -697,6 +697,75 @@
     renderThread();
   }
 
+  let currentReadAudio = null;
+  let currentReadBtn = null;
+
+  function stopCurrentReadAudio() {
+    if (currentReadAudio) {
+      try { currentReadAudio.pause(); } catch {}
+      try { URL.revokeObjectURL(currentReadAudio.src); } catch {}
+      currentReadAudio = null;
+    }
+    if (currentReadBtn) {
+      currentReadBtn.classList.remove('playing');
+      currentReadBtn = null;
+    }
+  }
+
+  async function toggleReadAloud(entry, btn) {
+    if (!entry) return;
+    if (currentReadBtn === btn && currentReadAudio) {
+      stopCurrentReadAudio();
+      return;
+    }
+    stopCurrentReadAudio();
+
+    const rid = entry.upstreamResponseId || '';
+    if (!rid) {
+      toast(text('webui.chat.readAloudUnavailable',
+        'Read-aloud unavailable for this message (only basic Grok models stream a usable upstream id).'),
+        'warn');
+      return;
+    }
+
+    btn.classList.add('playing');
+    setStatus(text('webui.chat.readAloudLoading', 'Fetching audio...'));
+    try {
+      const headers = await getAuthHeaders();
+      const params = new URLSearchParams({ voiceId: 'Ara' });
+      if (entry.upstreamConversationId) {
+        params.set('conversationId', entry.upstreamConversationId);
+      }
+      const res = await fetch(`/webui/api/voice/read/${encodeURIComponent(rid)}?${params}`, {
+        method: 'GET',
+        headers,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(body || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      currentReadAudio = audio;
+      currentReadBtn = btn;
+      audio.addEventListener('ended', () => {
+        if (currentReadBtn === btn) stopCurrentReadAudio();
+      });
+      audio.addEventListener('error', () => {
+        if (currentReadBtn === btn) stopCurrentReadAudio();
+        toast(text('webui.chat.readAloudFailed', 'Audio playback failed'), 'error');
+      });
+      await audio.play();
+      setStatus(text('webui.chat.readAloudPlaying', 'Playing audio...'));
+    } catch (error) {
+      btn.classList.remove('playing');
+      currentReadBtn = null;
+      currentReadAudio = null;
+      toast(`${text('webui.chat.readAloudFailed', 'Read-aloud failed')}: ${error.message || error}`, 'error');
+      setStatus(text('webui.chat.statusDone', 'Completed'));
+    }
+  }
+
   function regenerateAssistantAt(messageIndex) {
     const session = getCurrentSession();
     if (!session || sending || messageIndex < 0) return;
@@ -1178,15 +1247,27 @@
         setAssistantFeedback(entry.messageIndex, 'down');
       });
 
+      const speakBtn = document.createElement('button');
+      speakBtn.type = 'button';
+      speakBtn.className = 'msg-action-btn msg-action-btn-speak';
+      speakBtn.setAttribute('aria-label', text('webui.chat.readAloud', 'Read aloud'));
+      speakBtn.setAttribute('title', text('webui.chat.readAloud', 'Read aloud'));
+      speakBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 6a8 8 0 0 1 0 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+      speakBtn.addEventListener('click', () => {
+        toggleReadAloud(entry, speakBtn);
+      });
+
       right.appendChild(regenBtn);
       right.appendChild(copyBtn);
       right.appendChild(likeBtn);
       right.appendChild(dislikeBtn);
+      right.appendChild(speakBtn);
       actions.appendChild(right);
       wrap.appendChild(actions);
       entry.actions = actions;
       entry.likeBtn = likeBtn;
       entry.dislikeBtn = dislikeBtn;
+      entry.speakBtn = speakBtn;
     }
 
     thread.appendChild(wrap);
@@ -1268,12 +1349,16 @@
     }
     hideEmpty();
     messages.forEach((message, index) => {
-      createMessage(
+      const entry = createMessage(
         message.role,
         message.content,
         message.role === 'assistant' ? (message.reasoning_content || '') : '',
         index,
       );
+      if (entry && message.role === 'assistant') {
+        entry.upstreamResponseId = message.upstream_response_id || '';
+        entry.upstreamConversationId = message.upstream_conversation_id || '';
+      }
     });
     scrollThread();
   }
@@ -1537,6 +1622,8 @@
             reasoning_content: finalReasoning,
             createdAt: assistantCreatedAt,
             feedback: '',
+            upstream_response_id: assistantEntry.upstreamResponseId || '',
+            upstream_conversation_id: assistantEntry.upstreamConversationId || '',
           });
           syncCurrentSession();
           finalizeAssistantEntry(assistantEntry, messages.length - 1);
@@ -1556,6 +1643,14 @@
             ? json.error.message
             : text('webui.chat.errors.requestFailed', 'Request failed');
           throw new Error(errorMessage);
+        }
+
+        // Pick up upstream Grok IDs surfaced on the final chunk (TTS read-aloud).
+        if (typeof json.upstream_response_id === 'string' && json.upstream_response_id) {
+          assistantEntry.upstreamResponseId = json.upstream_response_id;
+        }
+        if (typeof json.upstream_conversation_id === 'string' && json.upstream_conversation_id) {
+          assistantEntry.upstreamConversationId = json.upstream_conversation_id;
         }
 
         const choice = json && json.choices && json.choices[0];
@@ -1595,6 +1690,8 @@
         reasoning_content: finalReasoning,
         createdAt: assistantCreatedAt,
         feedback: '',
+        upstream_response_id: assistantEntry.upstreamResponseId || '',
+        upstream_conversation_id: assistantEntry.upstreamConversationId || '',
       });
       syncCurrentSession();
       finalizeAssistantEntry(assistantEntry, messages.length - 1);
