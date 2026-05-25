@@ -44,7 +44,7 @@ MODELS: tuple[ModelSpec, ...] = (
     # implies. Pass an explicit value (e.g. "minimal") to override.
     ModelSpec("grok-4.3",                               ModeId.FAST, Tier.BASIC, Capability.CHAT,           True, "Grok 4.3 (Console)",                    console_model="grok-4.3",                       default_reasoning_effort="high"),
     ModelSpec("grok-4",                                 ModeId.FAST, Tier.BASIC, Capability.CHAT,           True, "Grok 4 (Console)",                      console_model="grok-4",                         default_reasoning_effort="high"),
-    ModelSpec("grok-4.20",                              ModeId.FAST, Tier.BASIC, Capability.CHAT,           True, "Grok 4.20 (Console)",                   console_model="grok-4.20",                      default_reasoning_effort="high"),
+    ModelSpec("grok-4.20",                              ModeId.FAST, Tier.BASIC, Capability.CHAT,           True, "Grok 4.20 (Console)",                   console_model="grok-4.20"),
     # Fixed-intensity reasoning model — upstream rejects reasoning.effort.
     ModelSpec("grok-4.20-reasoning",                    ModeId.FAST, Tier.BASIC, Capability.CHAT,           True, "Grok 4.20 Reasoning (Console)",         console_model="grok-4.20-0309-reasoning"),
     # Non-reasoning model — effort is not applicable.
