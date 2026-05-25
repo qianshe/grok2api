@@ -1,7 +1,7 @@
 (() => {
   const VERIFY_ENDPOINT = '/webui/api/verify';
   const MODELS_ENDPOINT = '/webui/api/models';
-  const CHAT_ENDPOINT = '/webui/api/chat/completions';
+  const CHAT_ENDPOINT = '/webui/api/responses';
   const PREFERRED_MODEL = 'grok-4.20-0309-non-reasoning';
   const STORE_KEY = 'grok2api_webui_chat_sessions_v1';
   const SIDEBAR_STORE_KEY = 'grok2api_webui_sidebar_collapsed_v1';
@@ -1545,19 +1545,29 @@
   }
 
   function buildPayload() {
-    const outgoing = [];
     const system = currentSystemPrompt();
-    if (system) outgoing.push({ role: 'system', content: system });
-    messages
-      .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-      .forEach((message) => outgoing.push(message));
-    return {
+    // Responses API: pass `instructions` (system prompt) + `input` (message list).
+    // Each prior message becomes a {type:"message"} item; multi-modal user
+    // messages with content arrays are forwarded as-is — the backend
+    // _parse_input handler converts input_text/input_image variants.
+    const input = messages
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+      .map((m) => ({
+        type: 'message',
+        role: m.role,
+        content: typeof m.content === 'string'
+          ? [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: m.content }]
+          : m.content,
+      }));
+    const payload = {
       model: modelSelect.value || PREFERRED_MODEL,
-      messages: outgoing,
+      input,
       stream: true,
       temperature: 0.8,
       top_p: 0.95,
     };
+    if (system) payload.instructions = system;
+    return payload;
   }
 
   async function loadModels() {
@@ -1647,24 +1657,31 @@
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
 
+      function finalizeStreamSuccess() {
+        const finalReasoning = hasVisibleReasoning(assistantEntry.reasoningText) ? assistantEntry.reasoningText : '';
+        messages.push({
+          role: 'assistant',
+          content: assistantEntry.text,
+          reasoning_content: finalReasoning,
+          createdAt: assistantCreatedAt,
+          feedback: '',
+          upstream_response_id: assistantEntry.upstreamResponseId || '',
+          upstream_conversation_id: assistantEntry.upstreamConversationId || '',
+        });
+        syncCurrentSession();
+        finalizeAssistantEntry(assistantEntry, messages.length - 1);
+        setStatus(text('webui.chat.statusDone', 'Completed'));
+      }
+
       function handleStreamChunk(chunk) {
         const messageEvent = parseSseEvent(chunk);
+        const event = messageEvent.event || 'message';
         const payload = messageEvent.data.trim();
         if (!payload) return false;
+
+        // Legacy Chat-Completions sentinel — keep so a switch back doesn't break.
         if (payload === '[DONE]') {
-          const finalReasoning = hasVisibleReasoning(assistantEntry.reasoningText) ? assistantEntry.reasoningText : '';
-          messages.push({
-            role: 'assistant',
-            content: assistantEntry.text,
-            reasoning_content: finalReasoning,
-            createdAt: assistantCreatedAt,
-            feedback: '',
-            upstream_response_id: assistantEntry.upstreamResponseId || '',
-            upstream_conversation_id: assistantEntry.upstreamConversationId || '',
-          });
-          syncCurrentSession();
-          finalizeAssistantEntry(assistantEntry, messages.length - 1);
-          setStatus(text('webui.chat.statusDone', 'Completed'));
+          finalizeStreamSuccess();
           return true;
         }
 
@@ -1675,32 +1692,76 @@
           return false;
         }
 
-        if (messageEvent.event === 'error' || json.error) {
-          const errorMessage = json.error && json.error.message
-            ? json.error.message
-            : text('webui.chat.errors.requestFailed', 'Request failed');
+        const eventType = event !== 'message' ? event : (json && json.type) || '';
+
+        // Hard error frames from upstream.
+        if (eventType === 'error' || eventType === 'response.failed' || eventType === 'response.error' || json.error) {
+          const errPayload = json.error || (json.response && json.response.error) || {};
+          const errorMessage = (errPayload && errPayload.message)
+            || (errPayload && errPayload.code)
+            || text('webui.chat.errors.requestFailed', 'Request failed');
           throw new Error(errorMessage);
         }
 
-        // Pick up upstream Grok IDs surfaced on the final chunk (TTS read-aloud).
+        // Capture upstream Grok IDs that the chat.py path attaches (still surfaced
+        // on the final response object when routed through grok.com).
+        const respPart = json && json.response;
+        if (respPart && typeof respPart === 'object') {
+          if (typeof respPart.upstream_response_id === 'string' && respPart.upstream_response_id) {
+            assistantEntry.upstreamResponseId = respPart.upstream_response_id;
+          }
+          if (typeof respPart.upstream_conversation_id === 'string' && respPart.upstream_conversation_id) {
+            assistantEntry.upstreamConversationId = respPart.upstream_conversation_id;
+          }
+        }
         if (typeof json.upstream_response_id === 'string' && json.upstream_response_id) {
           assistantEntry.upstreamResponseId = json.upstream_response_id;
         }
-        if (typeof json.upstream_conversation_id === 'string' && json.upstream_conversation_id) {
-          assistantEntry.upstreamConversationId = json.upstream_conversation_id;
+
+        // Responses API streaming events.
+        if (eventType === 'response.output_text.delta') {
+          const delta = typeof json.delta === 'string' ? json.delta : '';
+          if (delta) {
+            updateAssistant(assistantEntry, delta);
+            setStatus(text('webui.chat.statusGenerating', 'Generating...'));
+          }
+          return false;
         }
 
-        const choice = json && json.choices && json.choices[0];
-        const delta = choice && choice.delta ? choice.delta : {};
-        if (typeof delta.reasoning_content === 'string') {
-          updateReasoning(assistantEntry, delta.reasoning_content);
-          if (hasVisibleReasoning(assistantEntry.reasoningText)) {
-            setStatus(text('webui.chat.statusThinking', 'Thinking...'));
+        if (
+          eventType === 'response.reasoning_summary_text.delta' ||
+          eventType === 'response.reasoning_summary.delta' ||
+          eventType === 'response.reasoning.delta'
+        ) {
+          const delta = typeof json.delta === 'string' ? json.delta : '';
+          if (delta) {
+            updateReasoning(assistantEntry, delta);
+            if (hasVisibleReasoning(assistantEntry.reasoningText)) {
+              setStatus(text('webui.chat.statusThinking', 'Thinking...'));
+            }
           }
+          return false;
         }
-        if (delta.content) {
-          updateAssistant(assistantEntry, delta.content);
-          setStatus(text('webui.chat.statusGenerating', 'Generating...'));
+
+        if (eventType === 'response.completed') {
+          finalizeStreamSuccess();
+          return true;
+        }
+
+        // Fallback: Chat-Completions shape, in case backend later switches.
+        const choice = json && json.choices && json.choices[0];
+        const delta = choice && choice.delta ? choice.delta : null;
+        if (delta) {
+          if (typeof delta.reasoning_content === 'string') {
+            updateReasoning(assistantEntry, delta.reasoning_content);
+            if (hasVisibleReasoning(assistantEntry.reasoningText)) {
+              setStatus(text('webui.chat.statusThinking', 'Thinking...'));
+            }
+          }
+          if (delta.content) {
+            updateAssistant(assistantEntry, delta.content);
+            setStatus(text('webui.chat.statusGenerating', 'Generating...'));
+          }
         }
         return false;
       }

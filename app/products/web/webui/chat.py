@@ -11,8 +11,9 @@ from app.products.openai.router import (
     _available_pools,
     _model_available_for_pools,
     chat_completions_endpoint,
+    responses_endpoint,
 )
-from app.products.openai.schemas import ChatCompletionRequest
+from app.products.openai.schemas import ChatCompletionRequest, ResponsesCreateRequest
 
 router = APIRouter(prefix="/webui/api", dependencies=[Depends(verify_webui_key)], tags=["WebUI - Chat"])
 
@@ -50,6 +51,11 @@ async def list_webui_models(request: Request):
 @router.post("/chat/completions")
 async def webui_chat_completions(req: ChatCompletionRequest):
     return await chat_completions_endpoint(req)
+
+
+@router.post("/responses")
+async def webui_responses(req: ResponsesCreateRequest):
+    return await responses_endpoint(req)
 
 
 __all__ = ["router"]
