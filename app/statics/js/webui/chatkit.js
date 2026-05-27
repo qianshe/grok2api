@@ -1,11 +1,13 @@
 (() => {
   const VOICE_ENDPOINT = '/webui/api/voice/token';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
-  const ROLE_PRESET_PREF_KEY = 'grok2api_voice_role_preset_id';
-  const rolePresetSelect = document.getElementById('rolePresetSelect');
+  const PERSONALITY_PREF_KEY = 'grok2api_voice_personality';
+  const CUSTOM_INSTRUCTION_PREF_KEY = 'grok2api_voice_custom_instruction';
+  const CUSTOM_PERSONALITY_VALUE = 'custom_instruction';
   const voiceSelect = document.getElementById('voiceSelect');
   const personalitySelect = document.getElementById('personalitySelect');
   const speedSelect = document.getElementById('speedSelect');
+  const instructionPill = document.getElementById('instructionPill');
   const instructionInput = document.getElementById('instructionInput');
   const startVoiceBtn = document.getElementById('startVoiceBtn');
   const muteVoiceBtn = document.getElementById('muteVoiceBtn');
@@ -42,25 +44,6 @@
   const VOICE_DEBUG = (() => {
     try { return localStorage.getItem('grok2api_voice_debug') === '1'; } catch { return false; }
   })();
-  const ROLE_PRESETS = [
-    { id: 'default', name: '官方默认', instruction: '' },
-    {
-      id: 'gentle_sister',
-      name: '温柔姐姐',
-      instruction: '你是一个温柔、成熟、自然的中文姐姐角色。用亲近、轻松、带一点撒娇但不过度的语气交流。回答要适合语音对话，简短、自然、有情绪，不要像书面报告。',
-    },
-    {
-      id: 'cool_oneesan',
-      name: '冷淡御姐',
-      instruction: '你是一个冷静、成熟、略带距离感的中文御姐角色。语气克制、简洁、可靠，偶尔展现温柔，但不要夸张撒娇。回答要适合语音对话。',
-    },
-    {
-      id: 'healing_companion',
-      name: '治愈陪伴',
-      instruction: '你是一个温柔、耐心、善于倾听的中文陪伴角色。优先安抚情绪，回答简短自然，像真实语音聊天一样给予回应和陪伴。',
-    },
-  ];
-
   const controlIcon = {
     start: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7.25 17 12l-8 4.75V7.25Z" fill="currentColor" stroke="none"/></svg>',
     pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5v11"/><path d="M15 6.5v11"/></svg>',
@@ -640,37 +623,30 @@
 
   const selectedVoiceId = () => String(voiceSelect?.value || 'ara').trim() || 'ara';
 
-  const selectedRolePreset = () => {
-    const id = String(rolePresetSelect?.value || 'default').trim() || 'default';
-    return ROLE_PRESETS.find((item) => item.id === id) || ROLE_PRESETS[0];
+  const isCustomPersonality = () => personalitySelect?.value === CUSTOM_PERSONALITY_VALUE;
+
+  const selectedPersonality = () => {
+    const value = String(personalitySelect?.value || 'assistant').trim() || 'assistant';
+    return value === CUSTOM_PERSONALITY_VALUE ? 'assistant' : value;
   };
 
-  const applyRolePreset = (preset = selectedRolePreset()) => {
-    if (!instructionInput || !preset) return;
-    instructionInput.value = preset.instruction || '';
-    if (personalitySelect && preset.instruction) personalitySelect.value = 'custom';
+  const selectedCustomInstruction = () => (
+    isCustomPersonality() ? String(instructionInput?.value || '').trim() : ''
+  );
+
+  const renderInstructionVisibility = () => {
+    const enabled = isCustomPersonality();
+    if (instructionPill) instructionPill.hidden = !enabled;
+    if (instructionInput) instructionInput.disabled = !enabled;
   };
 
-  const renderRolePresetOptions = () => {
-    if (!rolePresetSelect) return;
-    rolePresetSelect.innerHTML = ROLE_PRESETS
-      .map((preset) => `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`)
-      .join('');
+  const persistCustomInstructionPreference = () => {
+    try { localStorage.setItem(CUSTOM_INSTRUCTION_PREF_KEY, String(instructionInput?.value || '')); } catch {}
   };
 
-  const persistRolePresetPreference = () => {
-    try { localStorage.setItem(ROLE_PRESET_PREF_KEY, selectedRolePreset().id); } catch {}
-  };
-
-  const restoreRolePresetPreference = () => {
-    if (!rolePresetSelect) return;
-    try {
-      const stored = String(localStorage.getItem(ROLE_PRESET_PREF_KEY) || '').trim();
-      if (stored && ROLE_PRESETS.some((preset) => preset.id === stored)) {
-        rolePresetSelect.value = stored;
-      }
-    } catch {}
-    applyRolePreset();
+  const restoreCustomInstructionPreference = () => {
+    if (!instructionInput) return;
+    try { instructionInput.value = localStorage.getItem(CUSTOM_INSTRUCTION_PREF_KEY) || ''; } catch {}
   };
 
   const persistVoicePreference = () => {
@@ -683,6 +659,20 @@
       const stored = String(localStorage.getItem(VOICE_PREF_KEY) || '').trim();
       if (stored && Array.from(voiceSelect.options).some((option) => option.value === stored)) {
         voiceSelect.value = stored;
+      }
+    } catch {}
+  };
+
+  const persistPersonalityPreference = () => {
+    try { localStorage.setItem(PERSONALITY_PREF_KEY, String(personalitySelect?.value || 'assistant')); } catch {}
+  };
+
+  const restorePersonalityPreference = () => {
+    if (!personalitySelect) return;
+    try {
+      const stored = String(localStorage.getItem(PERSONALITY_PREF_KEY) || '').trim();
+      if (stored && Array.from(personalitySelect.options).some((option) => option.value === stored)) {
+        personalitySelect.value = stored;
       }
     } catch {}
   };
@@ -1033,9 +1023,9 @@
       headers['Content-Type'] = 'application/json';
       const params = new URLSearchParams({
         voice: selectedVoiceId(),
-        personality: personalitySelect?.value || 'assistant',
+        personality: selectedPersonality(),
         speed: speedSelect?.value || '1',
-        instruction: instructionInput?.value?.trim() || '',
+        instruction: selectedCustomInstruction(),
       });
       const res = await fetch(`${VOICE_ENDPOINT}?${params.toString()}`, {
         headers,
@@ -1138,10 +1128,11 @@
   };
 
   voiceSelect?.addEventListener('change', persistVoicePreference);
-  rolePresetSelect?.addEventListener('change', () => {
-    applyRolePreset();
-    persistRolePresetPreference();
+  personalitySelect?.addEventListener('change', () => {
+    renderInstructionVisibility();
+    persistPersonalityPreference();
   });
+  instructionInput?.addEventListener('input', persistCustomInstructionPreference);
   chatkitComposer?.addEventListener('submit', (event) => {
     event.preventDefault();
     void submitChatkitText();
@@ -1167,8 +1158,9 @@
   });
 
   restoreVoicePreference();
-  renderRolePresetOptions();
-  restoreRolePresetPreference();
+  restorePersonalityPreference();
+  restoreCustomInstructionPreference();
+  renderInstructionVisibility();
   persistVoicePreference();
   renderConnectedStatus();
   setButtons(false);

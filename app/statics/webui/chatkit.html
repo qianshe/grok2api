@@ -58,10 +58,6 @@
         <section class="webui-chatkit-toolbar" aria-label="Voice settings">
           <div class="webui-chatkit-toolbar-controls">
             <label class="webui-chatkit-pill">
-              <span class="webui-chatkit-pill-label">角色</span>
-              <select id="rolePresetSelect" class="input webui-chatkit-pill-input"></select>
-            </label>
-            <label class="webui-chatkit-pill">
               <span class="webui-chatkit-pill-label" data-i18n="webui.chatkit.voiceLabel">声音</span>
               <select id="voiceSelect" class="input webui-chatkit-pill-input">
                 <option value="ara" selected>Ara</option>
@@ -76,13 +72,13 @@
               <span class="webui-chatkit-pill-label" data-i18n="webui.chatkit.personalityLabel">个性</span>
               <select id="personalitySelect" class="input webui-chatkit-pill-input">
                 <option value="assistant" selected>Assistant</option>
-                <option value="custom">Custom</option>
                 <option value="therapist">Therapist</option>
                 <option value="storyteller">Storyteller</option>
                 <option value="kids_story_time">Kids Story Time</option>
                 <option value="meditation">Meditation</option>
                 <option value="unhinged">Unhinged 18+</option>
                 <option value="sexy">Sexy 18+</option>
+                <option value="custom_instruction">自定义个性…</option>
               </select>
             </label>
             <label class="webui-chatkit-pill">
@@ -99,9 +95,9 @@
                 <option value="2.0">2.0x</option>
               </select>
             </label>
-            <label class="webui-chatkit-pill">
-              <span class="webui-chatkit-pill-label" data-i18n="webui.chatkit.instructionLabel">提示</span>
-              <input id="instructionInput" type="text" class="input webui-chatkit-pill-input" />
+            <label id="instructionPill" class="webui-chatkit-pill webui-chatkit-custom-pill" hidden>
+              <span class="webui-chatkit-pill-label" data-i18n="webui.chatkit.instructionLabel">自定义个性</span>
+              <textarea id="instructionInput" class="input webui-chatkit-pill-input webui-chatkit-instruction-input" rows="3" placeholder="这里就是自定义个性/角色提示，会作为 Grok Voice 的 raw instructions 发送。例：你是一个温柔自然的中文陪伴角色，回答要短、像语音聊天。"></textarea>
             </label>
           </div>
         </section>

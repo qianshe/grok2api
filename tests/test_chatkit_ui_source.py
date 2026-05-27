@@ -14,20 +14,24 @@ class ChatkitUiSourceTests(unittest.TestCase):
         self.assertIn('id="chatkitThread"', html)
         self.assertIn('id="chatkitPromptInput"', html)
         self.assertIn('id="chatkitSendBtn"', html)
-        self.assertIn('id="rolePresetSelect"', html)
+        self.assertNotIn('id="rolePresetSelect"', html)
+        self.assertIn('value="custom_instruction"', html)
+        self.assertIn('id="instructionPill"', html)
+        self.assertIn('<textarea id="instructionInput"', html)
 
-    def test_chatkit_role_presets_only_manage_name_and_instruction(self):
+    def test_chatkit_custom_personality_uses_instruction_textarea(self):
         source = CHATKIT_JS.read_text(encoding="utf-8")
 
-        self.assertIn("const ROLE_PRESETS = [", source)
-        self.assertIn("id: 'gentle_sister'", source)
-        self.assertIn("name: '温柔姐姐'", source)
-        self.assertIn("instruction: '你是一个温柔", source)
-        self.assertIn("const ROLE_PRESET_PREF_KEY = 'grok2api_voice_role_preset_id'", source)
-        self.assertIn("applyRolePreset();", source)
-        self.assertIn("if (personalitySelect && preset.instruction) personalitySelect.value = 'custom';", source)
-        self.assertNotIn("voice: 'eve'", source)
-        self.assertNotIn("speed: '1.0'", source)
+        self.assertIn("const CUSTOM_PERSONALITY_VALUE = 'custom_instruction'", source)
+        self.assertIn("const PERSONALITY_PREF_KEY = 'grok2api_voice_personality'", source)
+        self.assertIn("const CUSTOM_INSTRUCTION_PREF_KEY = 'grok2api_voice_custom_instruction'", source)
+        self.assertIn("const selectedCustomInstruction = () => (", source)
+        self.assertIn("personality: selectedPersonality(),", source)
+        self.assertIn("instruction: selectedCustomInstruction(),", source)
+        self.assertIn("renderInstructionVisibility", source)
+        self.assertNotIn("ROLE_PRESETS", source)
+        self.assertNotIn("ROLE_PRESET_PREF_KEY", source)
+        self.assertNotIn("applyRolePreset", source)
 
     def test_chatkit_js_uses_official_realtime_voice_events_for_text_and_filters_noise(self):
         source = CHATKIT_JS.read_text(encoding="utf-8")

@@ -146,14 +146,14 @@ button{cursor:pointer}
   display:grid;grid-template-columns:284px minmax(0,1fr);gap:0;
   height:calc(100vh - 54px);min-height:0;overflow:hidden
 }
-.webui-chatkit-main{width:100%;max-width:none;margin:0;padding:18px 28px 22px}
-.webui-chatkit-shell{width:min(100%,1120px);margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr);gap:18px;min-height:calc(100vh - 106px)}
-.webui-chatkit-stage{display:grid;gap:18px;align-content:center}
+.webui-chatkit-main{width:100%;max-width:none;margin:0;padding:10px 28px 18px}
+.webui-chatkit-shell{width:min(100%,1120px);margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr);gap:14px;min-height:auto}
+.webui-chatkit-stage{display:grid;gap:14px;align-content:start;padding-top:clamp(18px,6vh,72px)}
 .webui-chatkit-toolbar{
-  width:min(100%,520px);margin:0 auto;min-width:0
+  width:min(100%,680px);margin:0 auto;min-width:0
 }
 .webui-chatkit-toolbar-controls{
-  display:grid;grid-template-columns:repeat(4,1fr);align-items:start;gap:10px;min-width:0
+  display:grid;grid-template-columns:repeat(3,1fr);align-items:start;gap:10px;min-width:0
 }
 @media (max-width: 600px){
   .webui-chatkit-toolbar{width:min(100%,100%)}
@@ -175,9 +175,15 @@ button{cursor:pointer}
 .webui-chatkit-pill-input:focus{
   outline:none !important;box-shadow:none !important
 }
+.webui-chatkit-pill[hidden]{display:none !important}
+.webui-chatkit-custom-pill{grid-column:1/-1;align-items:start}
+.webui-chatkit-instruction-input{
+  height:auto;min-height:68px;max-height:128px;padding:10px 12px;border-radius:16px;resize:vertical;
+  line-height:1.45;white-space:normal;text-align:initial;text-align-last:initial;font-weight:600
+}
 .webui-chatkit-stage-card{
-  min-height:calc(100vh - 300px);display:grid;place-items:center;align-content:center;text-align:center;
-  padding:28px 24px 20px;background:transparent;border:0;border-radius:0
+  min-height:auto;display:grid;place-items:center;align-content:center;text-align:center;
+  padding:12px 24px 8px;background:transparent;border:0;border-radius:0
 }
 .webui-chatkit-orb-wrap{display:grid;justify-items:center;gap:22px}
 .webui-chatkit-orb{
@@ -349,10 +355,10 @@ button{cursor:pointer}
 .webui-chatkit-badge[data-state="is-output-muted"]{background:rgba(244,226,220,.92);color:#8b4d3e}
 .webui-chatkit-badge[data-state="is-error"]{background:rgba(241,219,214,.92);color:#8a3e32}
 }
-.webui-chatkit-stage-copy{width:min(100%,540px);display:grid;gap:10px;max-width:540px;margin-top:34px;text-align:center}
+.webui-chatkit-stage-copy{width:min(100%,540px);display:grid;gap:8px;max-width:540px;margin-top:18px;text-align:center}
 .webui-chatkit-stage-title{font-size:30px;line-height:1.05;font-weight:700;letter-spacing:-.05em;color:#1c1a17}
 .webui-chatkit-stage-text{font-size:14px;line-height:1.75;color:#6f6a62}
-.webui-chatkit-controls{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:30px}
+.webui-chatkit-controls{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:18px}
 .webui-chatkit-icon-btn{
   width:40px;min-width:40px;height:40px;padding:0;border-radius:999px;display:grid;place-items:center;
   background:#f6f2ea;color:#2a2824
@@ -368,7 +374,7 @@ button{cursor:pointer}
   width:min(100%,720px);margin:0 auto;display:grid;gap:12px;min-height:0
 }
 .webui-chatkit-thread{
-  max-height:min(34vh,360px);min-height:128px;overflow:auto;display:grid;align-content:start;gap:10px;
+  max-height:min(28vh,300px);min-height:104px;overflow:auto;display:grid;align-content:start;gap:10px;
   padding:14px;border-radius:24px;background:rgba(246,242,234,.7);box-shadow:inset 0 1px 0 rgba(255,255,255,.45)
 }
 .webui-chatkit-empty{
@@ -1053,9 +1059,9 @@ textarea.input.webui-textarea{padding:8px 0 !important;resize:none !important}
   }
   .webui-masonry-actions{justify-content:flex-end;flex:0 0 auto}
   .webui-masonry-send{width:34px;min-width:34px}
-  .webui-chatkit-shell{gap:18px;min-height:auto}
-  .webui-chatkit-stage{min-height:calc(100vh - 148px);align-content:center}
-  .webui-chatkit-stage-card{min-height:calc(100vh - 300px);padding:12px 0 8px;background:transparent}
+  .webui-chatkit-shell{gap:14px;min-height:auto}
+  .webui-chatkit-stage{min-height:auto;align-content:start;padding-top:18px}
+  .webui-chatkit-stage-card{min-height:auto;padding:8px 0 6px;background:transparent}
   .webui-chatkit-orb-wrap{gap:14px}
   .webui-chatkit-orb{width:222px;height:222px}
   .webui-chatkit-orb::before{inset:16px 28px 30px;filter:blur(22px)}
