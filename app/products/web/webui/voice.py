@@ -49,6 +49,38 @@ class VoiceTokenRequest(BaseModel):
     instruction: str = ""
 
 
+def _voice_auto_quota_summary(directory) -> dict[str, int]:
+    table = getattr(directory, "_table", None)
+    if table is None:
+        return {"total": 0, "remaining_positive": 0, "remaining_zero": 0, "unknown": 0}
+
+    from app.dataplane.shared.enums import ModeId, PoolId, StatusId
+
+    candidates: set[int] = set()
+    for pool_id in (int(PoolId.SUPER), int(PoolId.BASIC), int(PoolId.HEAVY)):
+        candidates.update(table.mode_available.get((pool_id, int(ModeId.AUTO)), set()))
+
+    quota_col = table._quota_col(int(ModeId.AUTO))
+    total = positive = zero = unknown = 0
+    for idx in candidates:
+        if int(table.status_by_idx[idx]) != int(StatusId.ACTIVE):
+            continue
+        total += 1
+        remaining = int(quota_col[idx])
+        if remaining > 0:
+            positive += 1
+        elif remaining == 0:
+            zero += 1
+        else:
+            unknown += 1
+    return {
+        "total": total,
+        "remaining_positive": positive,
+        "remaining_zero": zero,
+        "unknown": unknown,
+    }
+
+
 async def _issue_voice_token(
     *,
     voice: str,
@@ -60,9 +92,10 @@ async def _issue_voice_token(
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
 
-    # Historical working ChatKit Voice path: super first, then basic, then
-    # heavy, using the AUTO quota window. Keep this route stable for LiveKit;
-    # TTS recovery below still uses any-account fallback where appropriate.
+    # Voice LiveKit needs an account with AUTO quota. Do not fall back to a
+    # random no-quota account: it may still return a token, but Grok often does
+    # not dispatch the voice agent, which surfaces as a misleading browser-side
+    # "could not establish pc connection" error.
     from app.control.model.enums import ModeId
 
     ts = now_s()
@@ -72,13 +105,15 @@ async def _issue_voice_token(
         now_s_override=ts,
     )
     if acct is None:
-        acct = await _acct_dir.reserve_any(
-            pool_candidates=(1, 0, 2),
-            now_s_override=ts,
+        summary = _voice_auto_quota_summary(_acct_dir)
+        logger.warning(
+            "voice account unavailable: auto_quota_total={} auto_quota_positive={} auto_quota_zero={} auto_quota_unknown={}",
+            summary["total"],
+            summary["remaining_positive"],
+            summary["remaining_zero"],
+            summary["unknown"],
         )
-        if acct is None:
-            raise RateLimitError("No available tokens for voice mode")
-        logger.info("voice account reserved via no-quota fallback")
+        raise RateLimitError("No available accounts with AUTO quota for Grok Voice")
 
     token = acct.token
     try:

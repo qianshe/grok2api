@@ -12,12 +12,14 @@ class WebuiVoiceSourceTests(unittest.TestCase):
         self.assertIn('@protected_router.get("/voice/token"', source)
         self.assertIn('@protected_router.post("/voice/token"', source)
         self.assertIn("async def _issue_voice_token(", source)
-        self.assertIn("Historical working ChatKit Voice path", source)
+        self.assertIn("Voice LiveKit needs an account with AUTO quota", source)
         self.assertIn("pool_candidates=(1, 0, 2)", source)
         self.assertIn("mode_id=int(ModeId.AUTO)", source)
-        self.assertIn("acct = await _acct_dir.reserve_any(", source)
-        self.assertIn("voice account reserved via no-quota fallback", source)
-        self.assertNotIn("Voice WebRTC sessions are more capability-sensitive", source)
+        self.assertIn("_voice_auto_quota_summary", source)
+        self.assertIn("voice account unavailable: auto_quota_total={}", source)
+        self.assertIn("No available accounts with AUTO quota for Grok Voice", source)
+        self.assertNotIn("acct = await _acct_dir.reserve_any(\n            pool_candidates=(1, 0, 2)", source)
+        self.assertNotIn("voice account reserved via no-quota fallback", source)
 
     def test_voice_input_audio_endpoint_does_not_use_paid_or_local_tts(self):
         source = VOICE_PY.read_text(encoding="utf-8")
