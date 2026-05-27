@@ -1289,13 +1289,20 @@
     if (room) void room.disconnect();
   });
 
-  restoreVoicePreference();
-  loadCustomPersonalities();
-  renderPersonalityOptions();
-  restorePersonalityPreference();
-  renderInstructionVisibility();
-  persistVoicePreference();
-  renderConnectedStatus();
-  setButtons(false);
-  renderChatkitMessages();
+  const boot = async () => {
+    await renderWebuiHeader?.();
+    await renderSiteFooter?.();
+    window.I18n?.apply?.(document);
+    restoreVoicePreference();
+    loadCustomPersonalities();
+    renderPersonalityOptions();
+    restorePersonalityPreference();
+    renderInstructionVisibility();
+    persistVoicePreference();
+    renderConnectedStatus();
+    setButtons(false);
+    renderChatkitMessages();
+  };
+
+  void boot();
 })();
