@@ -2,13 +2,18 @@
   const VOICE_ENDPOINT = '/webui/api/voice/token';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
   const PERSONALITY_PREF_KEY = 'grok2api_voice_personality';
-  const CUSTOM_INSTRUCTION_PREF_KEY = 'grok2api_voice_custom_instruction';
-  const CUSTOM_PERSONALITY_VALUE = 'custom_instruction';
+  const CUSTOM_PERSONALITIES_KEY = 'grok2api_voice_custom_personalities';
+  const CUSTOM_DRAFT_KEY = 'grok2api_voice_custom_draft';
+  const CUSTOM_NEW_VALUE = 'custom_new';
+  const CUSTOM_PERSONALITY_PREFIX = 'custom:';
   const voiceSelect = document.getElementById('voiceSelect');
   const personalitySelect = document.getElementById('personalitySelect');
   const speedSelect = document.getElementById('speedSelect');
   const instructionPill = document.getElementById('instructionPill');
+  const customPersonalityNameInput = document.getElementById('customPersonalityNameInput');
   const instructionInput = document.getElementById('instructionInput');
+  const saveCustomPersonalityBtn = document.getElementById('saveCustomPersonalityBtn');
+  const deleteCustomPersonalityBtn = document.getElementById('deleteCustomPersonalityBtn');
   const startVoiceBtn = document.getElementById('startVoiceBtn');
   const muteVoiceBtn = document.getElementById('muteVoiceBtn');
   const newSessionBtn = document.getElementById('newSessionBtn');
@@ -36,6 +41,7 @@
   let lastStatusDescription = '';
   let chatkitMessageSeq = 0;
   let chatkitSending = false;
+  let customPersonalities = [];
   const chatkitMessages = [];
   const realtimeMessageByItemId = new Map();
   let lastRealtimeItemId = null;
@@ -623,30 +629,111 @@
 
   const selectedVoiceId = () => String(voiceSelect?.value || 'ara').trim() || 'ara';
 
-  const isCustomPersonality = () => personalitySelect?.value === CUSTOM_PERSONALITY_VALUE;
-
-  const selectedPersonality = () => {
-    const value = String(personalitySelect?.value || 'assistant').trim() || 'assistant';
-    return value === CUSTOM_PERSONALITY_VALUE ? 'assistant' : value;
+  const normalizeCustomPersonality = (entry) => {
+    const id = String(entry?.id || '').trim();
+    const name = String(entry?.name || '').trim();
+    const instruction = String(entry?.instruction || '').trim();
+    if (!id || !name || !instruction) return null;
+    return { id, name, instruction };
   };
 
-  const selectedCustomInstruction = () => (
-    isCustomPersonality() ? String(instructionInput?.value || '').trim() : ''
+  const customPersonalityValue = (id) => `${CUSTOM_PERSONALITY_PREFIX}${id}`;
+  const isCustomPersonalityValue = (value) => String(value || '').startsWith(CUSTOM_PERSONALITY_PREFIX);
+  const selectedPersonalityValue = () => String(personalitySelect?.value || 'assistant').trim() || 'assistant';
+  const selectedCustomPersonalityId = () => (
+    isCustomPersonalityValue(selectedPersonalityValue())
+      ? selectedPersonalityValue().slice(CUSTOM_PERSONALITY_PREFIX.length)
+      : ''
   );
+  const selectedCustomPersonality = () => {
+    const id = selectedCustomPersonalityId();
+    return customPersonalities.find((item) => item.id === id) || null;
+  };
+  const isCustomPersonality = () => selectedPersonalityValue() === CUSTOM_NEW_VALUE || Boolean(selectedCustomPersonality());
+
+  const selectedPersonality = () => {
+    const value = selectedPersonalityValue();
+    return value === CUSTOM_NEW_VALUE || isCustomPersonalityValue(value) ? 'assistant' : value;
+  };
+
+  const selectedCustomInstruction = () => {
+    const saved = selectedCustomPersonality();
+    if (saved) return saved.instruction;
+    return isCustomPersonality() ? String(instructionInput?.value || '').trim() : '';
+  };
+
+  const selectedCustomPersonalityName = () => {
+    const saved = selectedCustomPersonality();
+    if (saved) return saved.name;
+    return String(customPersonalityNameInput?.value || '').trim();
+  };
+
+  const loadCustomPersonalities = () => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CUSTOM_PERSONALITIES_KEY) || '[]');
+      customPersonalities = Array.isArray(parsed)
+        ? parsed.map(normalizeCustomPersonality).filter(Boolean)
+        : [];
+    } catch {
+      customPersonalities = [];
+    }
+  };
+
+  const saveCustomPersonalities = () => {
+    try { localStorage.setItem(CUSTOM_PERSONALITIES_KEY, JSON.stringify(customPersonalities)); } catch {}
+  };
+
+  const appendCustomPersonalityOptions = () => {
+    if (!personalitySelect) return;
+    const anchor = personalitySelect.querySelector(`option[value="${CUSTOM_NEW_VALUE}"]`);
+    customPersonalities.forEach((item) => {
+      const option = document.createElement('option');
+      option.value = customPersonalityValue(item.id);
+      option.textContent = item.name;
+      if (anchor) personalitySelect.insertBefore(option, anchor); else personalitySelect.appendChild(option);
+    });
+  };
+
+  const renderPersonalityOptions = () => {
+    if (!personalitySelect) return;
+    personalitySelect.querySelectorAll(`option[value^="${CUSTOM_PERSONALITY_PREFIX}"]`).forEach((option) => option.remove());
+    appendCustomPersonalityOptions();
+  };
+
+  const persistCustomInstructionPreference = () => {
+    try {
+      localStorage.setItem(CUSTOM_DRAFT_KEY, JSON.stringify({
+        name: String(customPersonalityNameInput?.value || ''),
+        instruction: String(instructionInput?.value || ''),
+      }));
+    } catch {}
+  };
+
+  const restoreCustomInstructionPreference = () => {
+    const saved = selectedCustomPersonality();
+    if (saved) {
+      if (customPersonalityNameInput) customPersonalityNameInput.value = saved.name;
+      if (instructionInput) instructionInput.value = saved.instruction;
+      return;
+    }
+    try {
+      const draft = JSON.parse(localStorage.getItem(CUSTOM_DRAFT_KEY) || '{}');
+      if (customPersonalityNameInput) customPersonalityNameInput.value = String(draft?.name || '');
+      if (instructionInput) instructionInput.value = String(draft?.instruction || '');
+    } catch {
+      if (customPersonalityNameInput) customPersonalityNameInput.value = '';
+      if (instructionInput) instructionInput.value = '';
+    }
+  };
 
   const renderInstructionVisibility = () => {
     const enabled = isCustomPersonality();
     if (instructionPill) instructionPill.hidden = !enabled;
     if (instructionInput) instructionInput.disabled = !enabled;
-  };
-
-  const persistCustomInstructionPreference = () => {
-    try { localStorage.setItem(CUSTOM_INSTRUCTION_PREF_KEY, String(instructionInput?.value || '')); } catch {}
-  };
-
-  const restoreCustomInstructionPreference = () => {
-    if (!instructionInput) return;
-    try { instructionInput.value = localStorage.getItem(CUSTOM_INSTRUCTION_PREF_KEY) || ''; } catch {}
+    if (customPersonalityNameInput) customPersonalityNameInput.disabled = !enabled;
+    if (saveCustomPersonalityBtn) saveCustomPersonalityBtn.disabled = !enabled;
+    if (deleteCustomPersonalityBtn) deleteCustomPersonalityBtn.disabled = !selectedCustomPersonality();
+    restoreCustomInstructionPreference();
   };
 
   const persistVoicePreference = () => {
@@ -675,6 +762,48 @@
         personalitySelect.value = stored;
       }
     } catch {}
+  };
+
+  const createCustomPersonalityId = () => {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  };
+
+  const saveSelectedCustomPersonality = () => {
+    const name = selectedCustomPersonalityName();
+    const instruction = String(instructionInput?.value || '').trim();
+    if (!name || !instruction) {
+      showToast?.('请先填写个性名称和 Instruction', 'error');
+      return;
+    }
+
+    const currentId = selectedCustomPersonalityId();
+    const id = currentId || createCustomPersonalityId();
+    const next = { id, name, instruction };
+    const index = customPersonalities.findIndex((item) => item.id === id);
+    if (index >= 0) customPersonalities[index] = next;
+    else customPersonalities.push(next);
+    saveCustomPersonalities();
+    renderPersonalityOptions();
+    if (personalitySelect) personalitySelect.value = customPersonalityValue(id);
+    persistPersonalityPreference();
+    renderInstructionVisibility();
+    showToast?.('自定义个性已保存', 'success');
+  };
+
+  const deleteSelectedCustomPersonality = () => {
+    const currentId = selectedCustomPersonalityId();
+    if (!currentId) return;
+    customPersonalities = customPersonalities.filter((item) => item.id !== currentId);
+    saveCustomPersonalities();
+    renderPersonalityOptions();
+    if (personalitySelect) personalitySelect.value = CUSTOM_NEW_VALUE;
+    persistPersonalityPreference();
+    if (customPersonalityNameInput) customPersonalityNameInput.value = '';
+    if (instructionInput) instructionInput.value = '';
+    persistCustomInstructionPreference();
+    renderInstructionVisibility();
+    showToast?.('自定义个性已删除', 'success');
   };
 
   const renderConnectedStatus = () => {
@@ -1132,7 +1261,10 @@
     renderInstructionVisibility();
     persistPersonalityPreference();
   });
+  customPersonalityNameInput?.addEventListener('input', persistCustomInstructionPreference);
   instructionInput?.addEventListener('input', persistCustomInstructionPreference);
+  saveCustomPersonalityBtn?.addEventListener('click', saveSelectedCustomPersonality);
+  deleteCustomPersonalityBtn?.addEventListener('click', deleteSelectedCustomPersonality);
   chatkitComposer?.addEventListener('submit', (event) => {
     event.preventDefault();
     void submitChatkitText();
@@ -1158,8 +1290,9 @@
   });
 
   restoreVoicePreference();
+  loadCustomPersonalities();
+  renderPersonalityOptions();
   restorePersonalityPreference();
-  restoreCustomInstructionPreference();
   renderInstructionVisibility();
   persistVoicePreference();
   renderConnectedStatus();

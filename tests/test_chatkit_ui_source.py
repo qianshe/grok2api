@@ -15,17 +15,22 @@ class ChatkitUiSourceTests(unittest.TestCase):
         self.assertIn('id="chatkitPromptInput"', html)
         self.assertIn('id="chatkitSendBtn"', html)
         self.assertNotIn('id="rolePresetSelect"', html)
-        self.assertIn('value="custom_instruction"', html)
+        self.assertIn('value="custom_new"', html)
         self.assertIn('id="instructionPill"', html)
+        self.assertIn('id="customPersonalityNameInput"', html)
         self.assertIn('<textarea id="instructionInput"', html)
+        self.assertIn('id="saveCustomPersonalityBtn"', html)
+        self.assertIn('id="deleteCustomPersonalityBtn"', html)
 
-    def test_chatkit_custom_personality_uses_instruction_textarea(self):
+    def test_chatkit_custom_personality_uses_persisted_instruction_entries(self):
         source = CHATKIT_JS.read_text(encoding="utf-8")
 
-        self.assertIn("const CUSTOM_PERSONALITY_VALUE = 'custom_instruction'", source)
-        self.assertIn("const PERSONALITY_PREF_KEY = 'grok2api_voice_personality'", source)
-        self.assertIn("const CUSTOM_INSTRUCTION_PREF_KEY = 'grok2api_voice_custom_instruction'", source)
-        self.assertIn("const selectedCustomInstruction = () => (", source)
+        self.assertIn("const CUSTOM_PERSONALITIES_KEY = 'grok2api_voice_custom_personalities'", source)
+        self.assertIn("const CUSTOM_NEW_VALUE = 'custom_new'", source)
+        self.assertIn("const CUSTOM_PERSONALITY_PREFIX = 'custom:'", source)
+        self.assertIn("loadCustomPersonalities", source)
+        self.assertIn("saveSelectedCustomPersonality", source)
+        self.assertIn("deleteSelectedCustomPersonality", source)
         self.assertIn("personality: selectedPersonality(),", source)
         self.assertIn("instruction: selectedCustomInstruction(),", source)
         self.assertIn("renderInstructionVisibility", source)

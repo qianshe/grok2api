@@ -78,7 +78,7 @@
                 <option value="meditation">Meditation</option>
                 <option value="unhinged">Unhinged 18+</option>
                 <option value="sexy">Sexy 18+</option>
-                <option value="custom_instruction">自定义个性…</option>
+                <option value="custom_new">＋新增自定义个性…</option>
               </select>
             </label>
             <label class="webui-chatkit-pill">
@@ -95,10 +95,17 @@
                 <option value="2.0">2.0x</option>
               </select>
             </label>
-            <label id="instructionPill" class="webui-chatkit-pill webui-chatkit-custom-pill" hidden>
+            <div id="instructionPill" class="webui-chatkit-pill webui-chatkit-custom-pill" hidden>
               <span class="webui-chatkit-pill-label" data-i18n="webui.chatkit.instructionLabel">自定义个性</span>
-              <textarea id="instructionInput" class="input webui-chatkit-pill-input webui-chatkit-instruction-input" rows="3" placeholder="这里就是自定义个性/角色提示，会作为 Grok Voice 的 raw instructions 发送。例：你是一个温柔自然的中文陪伴角色，回答要短、像语音聊天。"></textarea>
-            </label>
+              <div class="webui-chatkit-custom-editor">
+                <input id="customPersonalityNameInput" type="text" class="input webui-chatkit-pill-input" placeholder="个性名称，如：姐姐" />
+                <textarea id="instructionInput" class="input webui-chatkit-pill-input webui-chatkit-instruction-input" rows="3" placeholder="这里就是自定义个性/角色提示，会作为 Grok Voice 的 raw instructions 发送。例：你是一个温柔自然的中文陪伴角色，回答要短、像语音聊天。"></textarea>
+                <div class="webui-chatkit-custom-actions">
+                  <button id="saveCustomPersonalityBtn" class="btn webui-chatkit-secondary-btn" type="button">保存个性</button>
+                  <button id="deleteCustomPersonalityBtn" class="btn webui-chatkit-secondary-btn" type="button">删除</button>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </section>

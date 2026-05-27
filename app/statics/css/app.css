@@ -177,10 +177,14 @@ button{cursor:pointer}
 }
 .webui-chatkit-pill[hidden]{display:none !important}
 .webui-chatkit-custom-pill{grid-column:1/-1;align-items:start}
+.webui-chatkit-custom-editor{display:grid;gap:8px;min-width:0}
 .webui-chatkit-instruction-input{
   height:auto;min-height:68px;max-height:128px;padding:10px 12px;border-radius:16px;resize:vertical;
   line-height:1.45;white-space:normal;text-align:initial;text-align-last:initial;font-weight:600
 }
+.webui-chatkit-custom-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.webui-chatkit-secondary-btn{height:30px;padding:0 12px;border-radius:999px;background:#f6f2ea;color:#2a2824;font-size:12px;font-weight:700}
+.webui-chatkit-secondary-btn:disabled{opacity:.45;cursor:not-allowed}
 .webui-chatkit-stage-card{
   min-height:auto;display:grid;place-items:center;align-content:center;text-align:center;
   padding:12px 24px 8px;background:transparent;border:0;border-radius:0
