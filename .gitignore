@@ -53,3 +53,8 @@ htmlcov/
 
 # Project specific
 .ace-tool/
+.serena/.gitignore
+.serena/project.yml
+.serena/memories/project_overview.md
+.serena/memories/style_and_completion.md
+.serena/memories/suggested_commands.md

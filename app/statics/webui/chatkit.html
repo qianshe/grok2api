@@ -47,8 +47,20 @@
           <div id="audioRoot" class="webui-chatkit-audio"></div>
         </div>
 
+        <section class="webui-chatkit-conversation" aria-label="Voice conversation">
+          <div id="chatkitThread" class="webui-chatkit-thread" aria-live="polite"></div>
+          <form id="chatkitComposer" class="webui-chatkit-composer">
+            <textarea id="chatkitPromptInput" class="input webui-chatkit-textarea" rows="1" placeholder="输入文本消息，Enter 发送，Shift+Enter 换行"></textarea>
+            <button id="chatkitSendBtn" class="webui-primary-btn" type="submit">发送</button>
+          </form>
+        </section>
+
         <section class="webui-chatkit-toolbar" aria-label="Voice settings">
           <div class="webui-chatkit-toolbar-controls">
+            <label class="webui-chatkit-pill">
+              <span class="webui-chatkit-pill-label">角色</span>
+              <select id="rolePresetSelect" class="input webui-chatkit-pill-input"></select>
+            </label>
             <label class="webui-chatkit-pill">
               <span class="webui-chatkit-pill-label" data-i18n="webui.chatkit.voiceLabel">声音</span>
               <select id="voiceSelect" class="input webui-chatkit-pill-input">

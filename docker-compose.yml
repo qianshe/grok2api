@@ -22,7 +22,6 @@ services:
       FLARESOLVERR_URL: http://flaresolverr:8191
       CF_REFRESH_INTERVAL: "600"
       CF_TIMEOUT: "60"
-
       # ACCOUNT_STORAGE: local | redis | mysql | postgresql
       # ACCOUNT_LOCAL_PATH: SQLite path when ACCOUNT_STORAGE=local
       # ACCOUNT_REDIS_URL: Redis DSN when ACCOUNT_STORAGE=redis

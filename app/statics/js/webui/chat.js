@@ -1,10 +1,12 @@
 (() => {
   const VERIFY_ENDPOINT = '/webui/api/verify';
   const MODELS_ENDPOINT = '/webui/api/models';
-  const CHAT_ENDPOINT = '/webui/api/responses';
+  const CHAT_ENDPOINT = '/webui/api/chat/completions';
   const PREFERRED_MODEL = 'grok-4.20-0309-non-reasoning';
   const STORE_KEY = 'grok2api_webui_chat_sessions_v1';
   const SIDEBAR_STORE_KEY = 'grok2api_webui_sidebar_collapsed_v1';
+  const VOICE_PREF_KEY = 'grok2api_voice_id';
+  const READ_ALOUD_ENABLED = false;
 
   const chatLayout = document.getElementById('chatLayout');
   const modelSelect = document.getElementById('modelSelect');
@@ -62,6 +64,21 @@
       .filter(Boolean)
       .map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1) : part)
       .join(' ');
+  }
+
+  function modelRouteBadge(item) {
+    if (!item || typeof item !== 'object') return '';
+    let badge = '';
+    if (typeof item.badge === 'string' && item.badge.trim()) {
+      badge = item.badge.trim();
+    } else if (item.free_web === true) {
+      badge = 'Free Web';
+    } else if (item.route === 'console') {
+      badge = 'Console';
+    } else if (item.route === 'web') {
+      badge = 'Official Web';
+    }
+    return badge;
   }
 
   function currentSystemPrompt() {
@@ -681,6 +698,8 @@
               : '',
             createdAt: Number(entry && entry.createdAt) || Date.now(),
             feedback: entry && typeof entry.feedback === 'string' ? entry.feedback : '',
+            upstream_response_id: entry && entry.role === 'assistant' ? String(entry.upstream_response_id || '') : '',
+            upstream_conversation_id: entry && entry.role === 'assistant' ? String(entry.upstream_conversation_id || '') : '',
           }))
         : [],
       updatedAt: Number(item && item.updatedAt) || Date.now(),
@@ -698,17 +717,51 @@
   }
 
   let currentReadAudio = null;
-  let currentReadUtter = null;
   let currentReadBtn = null;
+  const READ_AUDIO_CACHE_LIMIT = 20;
+  const readAudioCache = new Map();
+
+  function normalizeReadVoiceId(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return 'Ara';
+    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  }
+
+  function selectedReadVoiceId() {
+    try {
+      return normalizeReadVoiceId(localStorage.getItem(VOICE_PREF_KEY));
+    } catch {
+      return 'Ara';
+    }
+  }
+
+  function readAudioCacheKey(responseId, voiceId) {
+    return `${voiceId || 'Ara'}:${responseId}`;
+  }
+
+  function getCachedReadAudioUrl(key) {
+    const url = readAudioCache.get(key);
+    if (!url) return '';
+    readAudioCache.delete(key);
+    readAudioCache.set(key, url);
+    return url;
+  }
+
+  function putCachedReadAudioUrl(key, url) {
+    if (!key || !url) return;
+    if (readAudioCache.has(key)) readAudioCache.delete(key);
+    readAudioCache.set(key, url);
+    while (readAudioCache.size > READ_AUDIO_CACHE_LIMIT) {
+      const oldestKey = readAudioCache.keys().next().value;
+      const oldestUrl = readAudioCache.get(oldestKey);
+      readAudioCache.delete(oldestKey);
+      try { URL.revokeObjectURL(oldestUrl); } catch {}
+    }
+  }
 
   function stopCurrentReadAudio() {
-    if (currentReadUtter || (window.speechSynthesis && window.speechSynthesis.speaking)) {
-      try { window.speechSynthesis.cancel(); } catch {}
-      currentReadUtter = null;
-    }
     if (currentReadAudio) {
       try { currentReadAudio.pause(); } catch {}
-      try { URL.revokeObjectURL(currentReadAudio.src); } catch {}
       currentReadAudio = null;
     }
     if (currentReadBtn) {
@@ -717,37 +770,61 @@
     }
   }
 
-  function stripMarkdownForSpeech(input) {
-    if (!input) return '';
-    let s = String(input);
-    s = s.replace(/```[\s\S]*?```/g, ' ');                 // fenced code blocks
-    s = s.replace(/`([^`]+)`/g, '$1');                     // inline code
-    s = s.replace(/!\[[^\]]*\]\([^)]+\)/g, ' ');           // images
-    s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');         // links → text
-    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');               // bold **
-    s = s.replace(/__([^_]+)__/g, '$1');                   // bold __
-    s = s.replace(/\*([^*]+)\*/g, '$1');                   // italic *
-    s = s.replace(/_([^_]+)_/g, '$1');                     // italic _
-    s = s.replace(/~~([^~]+)~~/g, '$1');                   // strikethrough
-    s = s.replace(/^#{1,6}\s+/gm, '');                     // headers
-    s = s.replace(/^>\s?/gm, '');                          // blockquotes
-    s = s.replace(/^[*\-+]\s+/gm, '');                     // bullet markers
-    s = s.replace(/^\d+\.\s+/gm, '');                      // numbered list markers
-    s = s.replace(/^[-*_]{3,}\s*$/gm, '');                 // horizontal rules
-    s = s.replace(/\|/g, ' ');                             // table pipes
-    s = s.replace(/\n{2,}/g, '\n');                        // collapse blank lines
-    return s.trim();
-  }
+  async function playOfficialReadAloud(entry, btn) {
+    const responseId = String(entry && entry.upstreamResponseId || '').trim();
+    if (!responseId) {
+      toast(text(
+        'webui.chat.readAloudUnavailable',
+        'Read-aloud unavailable for this message (official Grok responseId is missing).'
+      ), 'warn');
+      return false;
+    }
 
-  function pickSpeechVoice(lang) {
-    const synth = window.speechSynthesis;
-    if (!synth) return null;
-    const voices = synth.getVoices() || [];
-    const wanted = (lang || '').toLowerCase();
-    if (!wanted) return null;
-    // Prefer voices whose lang starts with the wanted code (e.g. zh-CN matches zh).
-    const exact = voices.find((v) => (v.lang || '').toLowerCase().startsWith(wanted));
-    return exact || null;
+    const voiceId = selectedReadVoiceId();
+    const params = new URLSearchParams({ voiceId });
+    const conversationId = String(entry && entry.upstreamConversationId || '').trim();
+    if (conversationId) params.set('conversationId', conversationId);
+
+    const cacheKey = readAudioCacheKey(responseId, voiceId);
+    let audioUrl = getCachedReadAudioUrl(cacheKey);
+    if (!audioUrl) {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/webui/api/voice/read/${encodeURIComponent(responseId)}?${params.toString()}`, {
+        method: 'GET',
+        headers,
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      if (!blob || !blob.size) {
+        throw new Error('empty audio response');
+      }
+      audioUrl = URL.createObjectURL(blob);
+      putCachedReadAudioUrl(cacheKey, audioUrl);
+    }
+
+    const audio = entry.audioPlayer || new Audio();
+    audio.src = audioUrl;
+    audio.controls = true;
+    audio.hidden = false;
+    try { audio.currentTime = 0; } catch {}
+    audio.onended = () => {
+      if (currentReadBtn === btn) stopCurrentReadAudio();
+    };
+    audio.onerror = () => {
+      if (currentReadBtn === btn) stopCurrentReadAudio();
+      toast(text('webui.chat.readAloudFailed', 'Read aloud failed. If this is an older message, regenerate it and try again.'), 'error');
+    };
+
+    btn.classList.add('playing');
+    currentReadBtn = btn;
+    currentReadAudio = audio;
+    setStatus(text('webui.chat.readAloudPlaying', 'Playing audio...'));
+    await audio.play();
+    return true;
   }
 
   async function toggleReadAloud(entry, btn) {
@@ -758,48 +835,12 @@
     }
     stopCurrentReadAudio();
 
-    if (!('speechSynthesis' in window) || typeof window.SpeechSynthesisUtterance !== 'function') {
-      toast(text('webui.chat.readAloudUnsupported',
-        'This browser does not support speech synthesis.'), 'error');
-      return;
-    }
-
-    const raw = typeof entry.text === 'string' ? entry.text : extractTextContent(entry.text);
-    const cleanText = stripMarkdownForSpeech(raw);
-    if (!cleanText) {
-      toast(text('webui.chat.readAloudEmpty', 'Nothing to read aloud.'), 'warn');
-      return;
-    }
-
-    const utter = new SpeechSynthesisUtterance(cleanText);
-    const looksZh = /[一-鿿]/.test(cleanText);
-    utter.lang = looksZh ? 'zh-CN' : 'en-US';
-    const matchedVoice = pickSpeechVoice(looksZh ? 'zh' : 'en');
-    if (matchedVoice) utter.voice = matchedVoice;
-    utter.rate = 1.0;
-    utter.pitch = 1.0;
-    utter.volume = 1.0;
-
-    utter.onend = () => {
-      if (currentReadBtn === btn) stopCurrentReadAudio();
-    };
-    utter.onerror = (event) => {
-      if (currentReadBtn === btn) stopCurrentReadAudio();
-      const reason = event && event.error ? event.error : 'unknown';
-      // 'canceled' / 'interrupted' fire on normal stop; suppress those.
-      if (reason === 'canceled' || reason === 'interrupted') return;
-      toast(`${text('webui.chat.readAloudFailed', 'Speech synthesis failed')}: ${reason}`, 'error');
-    };
-
-    btn.classList.add('playing');
-    currentReadBtn = btn;
-    currentReadUtter = utter;
-    setStatus(text('webui.chat.readAloudPlaying', 'Playing audio...'));
     try {
-      window.speechSynthesis.speak(utter);
+      await playOfficialReadAloud(entry, btn);
     } catch (error) {
       stopCurrentReadAudio();
-      toast(`${text('webui.chat.readAloudFailed', 'Speech synthesis failed')}: ${error.message || error}`, 'error');
+      toast(`${text('webui.chat.readAloudFailed', 'Read aloud failed. If this is an older message, regenerate it and try again.')}: ${error.message || error}`, 'error');
+      setStatus(text('webui.chat.statusDone', 'Completed'));
     }
   }
 
@@ -1183,6 +1224,8 @@
       reasoningText: initialReasoning,
       waiting: isAssistantWaiting,
       messageIndex,
+      upstreamResponseId: '',
+      upstreamConversationId: '',
       actions: null,
       likeBtn: null,
       dislikeBtn: null,
@@ -1284,6 +1327,12 @@
         setAssistantFeedback(entry.messageIndex, 'down');
       });
 
+      const audioPlayer = document.createElement('audio');
+      audioPlayer.className = 'msg-audio-player';
+      audioPlayer.controls = true;
+      audioPlayer.preload = 'none';
+      audioPlayer.hidden = true;
+
       const speakBtn = document.createElement('button');
       speakBtn.type = 'button';
       speakBtn.className = 'msg-action-btn msg-action-btn-speak';
@@ -1301,10 +1350,12 @@
       right.appendChild(speakBtn);
       actions.appendChild(right);
       wrap.appendChild(actions);
+      wrap.appendChild(audioPlayer);
       entry.actions = actions;
       entry.likeBtn = likeBtn;
       entry.dislikeBtn = dislikeBtn;
       entry.speakBtn = speakBtn;
+      entry.audioPlayer = audioPlayer;
     }
 
     thread.appendChild(wrap);
@@ -1319,6 +1370,18 @@
     const message = entry.messageIndex >= 0 ? messages[entry.messageIndex] : null;
     if (entry.likeBtn) entry.likeBtn.classList.toggle('active', Boolean(message && message.feedback === 'up'));
     if (entry.dislikeBtn) entry.dislikeBtn.classList.toggle('active', Boolean(message && message.feedback === 'down'));
+    if (entry.speakBtn) {
+      const canReadAloud = READ_ALOUD_ENABLED && Boolean(String(entry.upstreamResponseId || '').trim());
+      entry.speakBtn.hidden = !canReadAloud;
+      entry.speakBtn.disabled = !canReadAloud;
+      entry.speakBtn.setAttribute('aria-hidden', canReadAloud ? 'false' : 'true');
+      entry.speakBtn.setAttribute(
+        'title',
+        canReadAloud
+          ? text('webui.chat.readAloud', 'Read aloud')
+          : text('webui.chat.readAloudUnavailable', 'Read-aloud unavailable for this message')
+      );
+    }
   }
 
   function renderAssistantEntry(entry) {
@@ -1395,6 +1458,7 @@
       if (entry && message.role === 'assistant') {
         entry.upstreamResponseId = message.upstream_response_id || '';
         entry.upstreamConversationId = message.upstream_conversation_id || '';
+        syncAssistantActions(entry);
       }
     });
     scrollThread();
@@ -1545,29 +1609,22 @@
   }
 
   function buildPayload() {
+    const outgoing = [];
     const system = currentSystemPrompt();
-    // Responses API: pass `instructions` (system prompt) + `input` (message list).
-    // Each prior message becomes a {type:"message"} item; multi-modal user
-    // messages with content arrays are forwarded as-is — the backend
-    // _parse_input handler converts input_text/input_image variants.
-    const input = messages
-      .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
-      .map((m) => ({
-        type: 'message',
-        role: m.role,
-        content: typeof m.content === 'string'
-          ? [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: m.content }]
-          : m.content,
-      }));
-    const payload = {
+    if (system) outgoing.push({ role: 'system', content: system });
+    messages
+      .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
+      .forEach((message) => outgoing.push(message));
+    return {
       model: modelSelect.value || PREFERRED_MODEL,
-      input,
+      messages: outgoing,
       stream: true,
       temperature: 0.8,
       top_p: 0.95,
+      metadata: {
+        webui_session_id: currentSessionId || '',
+      },
     };
-    if (system) payload.instructions = system;
-    return payload;
   }
 
   async function loadModels() {
@@ -1584,7 +1641,10 @@
     availableModels.forEach((item) => {
       const opt = document.createElement('option');
       opt.value = item.id;
-      opt.textContent = formatModelOptionLabel(item.id, item.name || item.id);
+      const badge = modelRouteBadge(item);
+      const label = formatModelOptionLabel(item.id, item.name || item.id);
+      opt.textContent = badge ? `${label} · ${badge}` : label;
+      opt.dataset.route = item.route || '';
       modelSelect.appendChild(opt);
     });
     modelSelect.value = ids.includes(PREFERRED_MODEL) ? PREFERRED_MODEL : (ids[0] || PREFERRED_MODEL);
@@ -1717,6 +1777,10 @@
         if (typeof json.upstream_response_id === 'string' && json.upstream_response_id) {
           assistantEntry.upstreamResponseId = json.upstream_response_id;
         }
+        if (typeof json.upstream_conversation_id === 'string' && json.upstream_conversation_id) {
+          assistantEntry.upstreamConversationId = json.upstream_conversation_id;
+        }
+        syncAssistantActions(assistantEntry);
 
         // Responses API streaming events.
         if (eventType === 'response.output_text.delta') {

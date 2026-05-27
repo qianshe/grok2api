@@ -579,6 +579,12 @@ def extract_console_usage(response_json: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def extract_console_response_id(response_json: dict[str, Any]) -> str:
+    """Extract the root Console Responses API id, when present."""
+    value = response_json.get("id") or response_json.get("response_id")
+    return value if isinstance(value, str) and value else ""
+
+
 def parse_console_error(status_code: int, body: str) -> UpstreamError:
     """Convert a non-200 console response into an UpstreamError."""
     message = f"Console upstream returned {status_code}"
@@ -623,6 +629,27 @@ def classify_console_sse_line(line: str | bytes) -> tuple[str, str]:
     return "skip", ""
 
 
+def _collect_id_fields(obj: Any, *, limit: int = 24) -> list[tuple[str, str]]:
+    """Return scalar id-like fields from an upstream Console frame for diagnostics."""
+    out: list[tuple[str, str]] = []
+
+    def walk(value: Any, path: str = "") -> None:
+        if len(out) >= limit:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                if "id" in str(key).lower() and isinstance(child, (str, int, float, bool)):
+                    out.append((child_path, str(child)[:96]))
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value[:5]):
+                walk(child, f"{path}[{index}]")
+
+    walk(obj)
+    return out
+
+
 class ConsoleStreamAdapter:
     """Parse upstream Console SSE frames and emit text/reasoning/tool deltas.
 
@@ -652,6 +679,8 @@ class ConsoleStreamAdapter:
         "text_buf",
         "thinking_buf",
         "_usage",
+        "_seen_id_values",
+        "upstream_response_id",
     )
 
     def __init__(self) -> None:
@@ -665,6 +694,8 @@ class ConsoleStreamAdapter:
         self.text_buf: list[str] = []
         self.thinking_buf: list[str] = []
         self._usage: dict[str, int] = {}
+        self._seen_id_values: set[str] = set()
+        self.upstream_response_id: str = ""
 
     def references_suffix(self) -> str:
         """Return the ``## Sources`` markdown block for the collected sources.
@@ -704,6 +735,18 @@ class ConsoleStreamAdapter:
 
         # Event-specific dispatch (event: line precedes data: line in SSE).
         ev = self._current_event or obj.get("type") or ""
+
+        id_fields = _collect_id_fields(obj)
+        new_id_fields = [item for item in id_fields if item[1] not in self._seen_id_values]
+        if new_id_fields:
+            self._seen_id_values.update(value for _, value in new_id_fields)
+            logger.info("console upstream ids frame: event={} ids={}", ev or "-", new_id_fields)
+
+        if not self.upstream_response_id:
+            resp_obj = obj.get("response") if isinstance(obj.get("response"), dict) else obj
+            rid = resp_obj.get("id") or resp_obj.get("response_id")
+            if isinstance(rid, str) and rid:
+                self.upstream_response_id = rid
 
         # ── Text delta ────────────────────────────────────────────────────────
         if ev == "response.output_text.delta" or obj.get("type") == "response.output_text.delta":
@@ -885,6 +928,7 @@ __all__ = [
     "extract_console_annotations",
     "extract_console_search_sources",
     "extract_console_usage",
+    "extract_console_response_id",
     "format_search_sources_suffix",
     "parse_console_error",
     "classify_console_sse_line",

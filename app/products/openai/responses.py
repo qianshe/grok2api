@@ -522,11 +522,17 @@ async def create(
     reasoning_effort: str | None = None,
     tools: list[dict] | None = None,
     tool_choice: Any = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict | AsyncGenerator[str, None]:
 
     cfg = get_config()
     spec = resolve_model(model)
     mode_id = int(spec.mode_id)  # cast once, reuse everywhere
+    session_id = ""
+    if isinstance(metadata, dict):
+        raw_session_id = metadata.get("webui_session_id") or metadata.get("session_id")
+        if raw_session_id:
+            session_id = str(raw_session_id)
 
     messages: list[dict] = []
     if instructions:
@@ -581,6 +587,54 @@ async def create(
     reasoning_id = make_resp_id("rs")
     message_id = make_resp_id("msg")
     timeout_s = cfg.get_float("chat.timeout", 120.0)
+    reuse_app_chat = bool(
+        session_id and cfg.get_bool("features.app_chat_reuse_conversation", False)
+    )
+
+    def _followup_ids_for(token_value: str, selected_mode_id: int) -> tuple[str | None, str | None]:
+        if not reuse_app_chat:
+            return None, None
+        from app.dataplane.reverse.runtime.chat_session import lookup as _lookup_chat_session
+
+        entry = _lookup_chat_session(session_id)
+        if (
+            entry is not None
+            and entry.token == token_value
+            and entry.model == model
+            and entry.mode_id == int(selected_mode_id)
+        ):
+            return entry.conversation_id, entry.parent_response_id
+        return None, None
+
+    def _record_followup_state(token_value: str, selected_mode_id: int, adapter: StreamAdapter) -> None:
+        if not reuse_app_chat or not adapter.upstream_conversation_id or not adapter.upstream_response_id:
+            return
+        from app.dataplane.reverse.runtime.chat_session import record as _record_chat_session
+
+        _record_chat_session(
+            session_id,
+            token=token_value,
+            model=model,
+            mode_id=int(selected_mode_id),
+            conversation_id=adapter.upstream_conversation_id,
+            parent_response_id=adapter.upstream_response_id,
+        )
+
+    def _attach_voice_ids(resp_obj: dict, token_value: str, adapter: StreamAdapter) -> dict:
+        """Attach upstream app-chat IDs so WebUI can call official read-response-audio."""
+        if not adapter.upstream_response_id:
+            return resp_obj
+        from app.dataplane.voice import record as _record_voice_session
+
+        _record_voice_session(
+            adapter.upstream_response_id,
+            token_value,
+            conversation_id=adapter.upstream_conversation_id,
+        )
+        resp_obj["upstream_response_id"] = adapter.upstream_response_id
+        if adapter.upstream_conversation_id:
+            resp_obj["upstream_conversation_id"] = adapter.upstream_conversation_id
+        return resp_obj
 
     # -------------------------------------------------------------------------
     # Streaming
@@ -621,11 +675,16 @@ async def create(
                         })
 
                     ended = False
+                    followup_conversation_id, followup_parent_response_id = _followup_ids_for(
+                        token, selected_mode_id
+                    )
                     async for line in _stream_chat(
                             token=token,
                             mode_id=ModeId(selected_mode_id),
                             message=message,
                             files=files,
+                            conversation_id=followup_conversation_id,
+                            parent_response_id=followup_parent_response_id,
                             timeout_s=timeout_s,
                     ):
                         if tool_calls_emitted:
@@ -818,17 +877,20 @@ async def create(
                         pt = estimate_prompt_tokens(message)
                         ct = estimate_tool_call_tokens(detected_fc_items)
                         rt = estimate_tokens(full_think) if full_think else 0
+                        completed = make_resp_object(
+                            response_id,
+                            model,
+                            "completed",
+                            output,
+                            build_resp_usage(pt, ct + rt, rt),
+                        )
+                        completed = _attach_voice_ids(completed, token, adapter)
                         yield format_sse(
                             "response.completed", {
                                 "type": "response.completed",
-                                "response": make_resp_object(
-                                    response_id,
-                                    model,
-                                    "completed",
-                                    output,
-                                    build_resp_usage(pt, ct + rt, rt),
-                                ),
+                                "response": completed,
                             })
+                        _record_followup_state(token, selected_mode_id, adapter)
                         yield "data: [DONE]\n\n"
                         success = True
                         logger.info(
@@ -946,16 +1008,18 @@ async def create(
                         pt = estimate_prompt_tokens(message)
                         ct = estimate_tokens(full_text)
                         rt = estimate_tokens(full_think) if full_think else 0
+                        completed = make_resp_object(
+                            response_id,
+                            model,
+                            "completed",
+                            output,
+                            build_resp_usage(pt, ct + rt, rt),
+                        )
+                        completed = _attach_voice_ids(completed, token, adapter)
                         yield format_sse(
                             "response.completed", {
                                 "type": "response.completed",
-                                "response": make_resp_object(
-                                    response_id,
-                                    model,
-                                    "completed",
-                                    output,
-                                    build_resp_usage(pt, ct + rt, rt),
-                                ),
+                                "response": completed,
                             })
                         yield "data: [DONE]\n\n"
                         success = True
@@ -1025,11 +1089,16 @@ async def create(
 
         try:
             try:
+                followup_conversation_id, followup_parent_response_id = _followup_ids_for(
+                    token, selected_mode_id
+                )
                 async for line in _stream_chat(
                         token=token,
                         mode_id=ModeId(selected_mode_id),
                         message=message,
                         files=files,
+                        conversation_id=followup_conversation_id,
+                        parent_response_id=followup_parent_response_id,
                         timeout_s=timeout_s,
                 ):
                     event_type, data = classify_line(line)
@@ -1045,6 +1114,7 @@ async def create(
                     if ended:
                         break
                 success = True
+                _record_followup_state(token, selected_mode_id, adapter)
 
             except UpstreamError as exc:
                 fail_exc = exc
@@ -1119,13 +1189,14 @@ async def create(
             ct = estimate_tool_call_tokens(tc_result.calls)
             rt = estimate_tokens(full_think) if full_think else 0
             logger.info("responses tool_calls: model={} calls={}", model, len(tc_result.calls))
-            return make_resp_object(
+            response_obj = make_resp_object(
                 response_id,
                 model,
                 "completed",
                 output,
                 build_resp_usage(pt, ct + rt, rt),
             )
+            return _attach_voice_ids(response_obj, token, adapter)
 
     logger.info(
         "responses request completed: model={} text_len={} reasoning_len={} image_count={}", model,
@@ -1162,13 +1233,14 @@ async def create(
     pt = estimate_prompt_tokens(message)
     ct = estimate_tokens(full_text)
     rt = estimate_tokens(full_think) if full_think else 0
-    return make_resp_object(
+    response_obj = make_resp_object(
         response_id,
         model,
         "completed",
         output,
         build_resp_usage(pt, ct + rt, rt),
     )
+    return _attach_voice_ids(response_obj, token, adapter)
 
 
 __all__ = ["create"]

@@ -17,6 +17,7 @@ CONSOLE_RESPONSES = f"{CONSOLE_BASE}/v1/responses"
 
 # ── App-chat (SSE streaming, new conversation) ──────────────────────────
 CHAT = f"{BASE}/rest/app-chat/conversations/new"
+CHAT_CONVERSATIONS = f"{BASE}/rest/app-chat/conversations"  # POST /{conversation_id}/responses
 
 # ── Asset management ─────────────────────────────────────────────────────
 ASSETS_UPLOAD = f"{BASE}/rest/app-chat/upload-file"  # POST (base64 upload)
@@ -55,6 +56,7 @@ __all__ = [
     "CONSOLE_BASE",
     "CONSOLE_RESPONSES",
     "CHAT",
+    "CHAT_CONVERSATIONS",
     "ASSETS_UPLOAD",
     "ASSETS_LIST",
     "ASSETS_DELETE",

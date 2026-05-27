@@ -29,8 +29,9 @@ def build_token_request_payload(
     custom_instruction: str   = "",
 ) -> bytes:
     """Return the JSON body for POST /rest/livekit/tokens."""
+    voice_id = str(voice or "ara").strip() or "ara"
     payload_dict = {
-        "voice":           voice,
+        "voice":           voice_id,
         "personality":     None,
         "playback_speed":  speed,
         "enable_vision":   False,

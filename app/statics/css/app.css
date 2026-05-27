@@ -364,6 +364,45 @@ button{cursor:pointer}
 .webui-chatkit-icon-btn-primary{background:#171511;color:#fff}
 .webui-chatkit-icon-btn:disabled{opacity:.4}
 .webui-chatkit-audio{display:none}
+.webui-chatkit-conversation{
+  width:min(100%,720px);margin:0 auto;display:grid;gap:12px;min-height:0
+}
+.webui-chatkit-thread{
+  max-height:min(34vh,360px);min-height:128px;overflow:auto;display:grid;align-content:start;gap:10px;
+  padding:14px;border-radius:24px;background:rgba(246,242,234,.7);box-shadow:inset 0 1px 0 rgba(255,255,255,.45)
+}
+.webui-chatkit-empty{
+  align-self:center;justify-self:center;color:#918b82;font-size:13px;padding:28px 12px;text-align:center
+}
+.webui-chatkit-message{display:grid;gap:5px;max-width:min(86%,620px)}
+.webui-chatkit-message-user{justify-self:end;text-align:right}
+.webui-chatkit-message-assistant,.webui-chatkit-message-system{justify-self:start;text-align:left}
+.webui-chatkit-message-meta{
+  display:flex;gap:8px;align-items:center;color:#8b857b;font-size:11px;font-weight:700;padding:0 4px
+}
+.webui-chatkit-message-user .webui-chatkit-message-meta{justify-content:flex-end}
+.webui-chatkit-message-body{
+  padding:10px 13px;border-radius:18px;background:#fff;color:#1d1a16;font-size:14px;line-height:1.6;
+  box-shadow:0 8px 20px rgba(36,31,26,.055);word-break:break-word
+}
+.webui-chatkit-message-user .webui-chatkit-message-body{background:#171511;color:#fff;border-bottom-right-radius:6px}
+.webui-chatkit-message-assistant .webui-chatkit-message-body{background:#fff;border-bottom-left-radius:6px}
+.webui-chatkit-message-system .webui-chatkit-message-body{background:#eee8dc;color:#6b6358;font-size:12px}
+.webui-chatkit-partial{font-size:10px;font-weight:700;color:#8a6a2f;background:#f0dfb7;border-radius:999px;padding:2px 7px}
+.webui-chatkit-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
+.webui-chatkit-textarea{
+  min-height:42px;max-height:132px;resize:none;padding:11px 14px;border:0;border-radius:18px;background:var(--webui-control-surface) !important;
+  font-size:14px;line-height:1.45;box-shadow:inset 0 1px 0 rgba(255,255,255,.42)
+}
+.webui-chatkit-textarea:focus{outline:none !important;box-shadow:0 0 0 2px rgba(23,21,17,.08) !important}
+.webui-chatkit-composer .webui-primary-btn{height:42px;border-radius:999px;padding:0 18px;white-space:nowrap}
+@media (max-width: 600px){
+  .webui-chatkit-conversation{width:100%}
+  .webui-chatkit-thread{max-height:30vh;border-radius:20px}
+  .webui-chatkit-message{max-width:94%}
+  .webui-chatkit-composer{grid-template-columns:minmax(0,1fr)}
+  .webui-chatkit-composer .webui-primary-btn{width:100%}
+}
 @keyframes webui-chatkit-idle-float{
   0%,100%{transform:translate3d(0,0,0)}
   50%{transform:translate3d(0,-8px,0)}
@@ -499,6 +538,8 @@ button{cursor:pointer}
 }
 .msg-action-btn:hover{background:#f2f0ea;color:#22201c}
 .msg-action-btn.active{background:#ece8df;color:#171511}
+.msg-audio-player{width:min(100%,420px);height:32px;margin-top:4px;display:block}
+.msg-audio-player[hidden]{display:none}
 .msg-action-btn svg{width:14px;height:14px;display:block}
 .msg-action-btn-regen svg{width:12px;height:12px}
 .msg-card-editing{

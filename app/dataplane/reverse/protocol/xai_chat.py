@@ -83,6 +83,29 @@ def build_chat_payload(
     return payload
 
 
+def build_followup_chat_payload(
+    *,
+    message:               str,
+    mode_id:               ModeId,
+    parent_response_id:    str,
+    file_attachments:      list[str]        = (),
+    tool_overrides:        dict[str, Any]   | None = None,
+    model_config_override: dict[str, Any]   | None = None,
+    request_overrides:     dict[str, Any]   | None = None,
+) -> dict[str, Any]:
+    """Build the JSON payload for POST /rest/app-chat/conversations/{id}/responses."""
+    payload = build_chat_payload(
+        message=message,
+        mode_id=mode_id,
+        file_attachments=file_attachments,
+        tool_overrides=tool_overrides,
+        model_config_override=model_config_override,
+        request_overrides=request_overrides,
+    )
+    payload["parentResponseId"] = parent_response_id
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # SSE line classification (unchanged)
 # ---------------------------------------------------------------------------
@@ -157,6 +180,16 @@ def raise_for_stream_error(data: str | bytes | dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # FrameEvent — single output event from StreamAdapter.feed()
 # ---------------------------------------------------------------------------
+
+
+def _nested_str(obj: dict[str, Any], *path: str) -> str:
+    cur: Any = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return ""
+        cur = cur.get(key)
+    return cur if isinstance(cur, str) and cur else ""
+
 
 @dataclass(slots=True)
 class FrameEvent:
@@ -236,7 +269,7 @@ class StreamAdapter:
         "upstream_conversation_id",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, conversation_id: str = "") -> None:
         self._card_cache: dict[str, dict] = {}
         self._citation_order: list[str] = []
         self._citation_map: dict[str, int] = {}
@@ -257,7 +290,7 @@ class StreamAdapter:
         self.image_urls: list[tuple[str, str]] = []   # [(url, imageUuid), ...]
         # Upstream Grok IDs captured from SSE — used for TTS read-response-audio.
         self.upstream_response_id: str = ""
-        self.upstream_conversation_id: str = ""
+        self.upstream_conversation_id: str = conversation_id or ""
 
     # 搜索信源追加：当配置启用且有 webSearchResults 时，格式化为 ## Sources 段落
     # 标记行 [grok2api-sources]: # 是 markdown link reference definition，渲染器不显示，
@@ -311,18 +344,50 @@ class StreamAdapter:
         if not result:
             return []
         resp = result.get("response")
-        if not resp:
-            return []
+        if not isinstance(resp, dict):
+            resp = result
 
         # Capture upstream Grok IDs (TTS read-response-audio needs these).
-        # They appear at result.conversationId / result.responseId on early frames.
-        if not self.upstream_response_id:
-            rid = result.get("responseId") or resp.get("responseId")
-            if isinstance(rid, str) and rid:
-                self.upstream_response_id = rid
+        # The first app-chat frame may contain userResponse.responseId; TTS needs
+        # the assistant/model responseId, so skip user frames and let later
+        # modelResponse frames override earlier flat IDs.
+        model_rid = (
+            _nested_str(resp, "modelResponse", "responseId")
+            or _nested_str(result, "modelResponse", "responseId")
+        )
+        flat_rid = _nested_str(result, "responseId") or _nested_str(resp, "responseId")
+        has_user_response = bool(
+            isinstance(result.get("userResponse"), dict)
+            or isinstance(resp.get("userResponse"), dict)
+        )
+        is_assistant_output = bool(
+            result.get("messageTag") == "final"
+            or result.get("isSoftStop") is True
+            or isinstance(result.get("finalMetadata"), dict)
+            or isinstance(resp.get("finalMetadata"), dict)
+        )
+        rid = model_rid or (flat_rid if not has_user_response else "")
+        if rid and (model_rid or is_assistant_output or not self.upstream_response_id):
+            if rid != self.upstream_response_id:
+                source = "modelResponse" if model_rid else "assistant_final" if is_assistant_output else "flat"
+                logger.info(
+                    "app-chat upstream response id captured: source={} response_id={} previous={} conversation_id={}",
+                    source,
+                    rid,
+                    self.upstream_response_id or "-",
+                    self.upstream_conversation_id or "-",
+                )
+            self.upstream_response_id = rid
         if not self.upstream_conversation_id:
-            cid = result.get("conversationId") or resp.get("conversationId")
-            if isinstance(cid, str) and cid:
+            cid = (
+                _nested_str(result, "conversationId")
+                or _nested_str(resp, "conversationId")
+                or _nested_str(result, "conversation", "conversationId")
+                or _nested_str(resp, "conversation", "conversationId")
+                or _nested_str(result, "conversation", "id")
+                or _nested_str(resp, "conversation", "id")
+            )
+            if cid:
                 self.upstream_conversation_id = cid
 
         events: list[FrameEvent] = []
@@ -679,6 +744,7 @@ class StreamAdapter:
 
 __all__ = [
     "build_chat_payload",
+    "build_followup_chat_payload",
     "classify_line",
     "FrameEvent",
     "StreamAdapter",

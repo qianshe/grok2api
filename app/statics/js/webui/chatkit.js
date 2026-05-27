@@ -1,5 +1,8 @@
 (() => {
   const VOICE_ENDPOINT = '/webui/api/voice/token';
+  const VOICE_PREF_KEY = 'grok2api_voice_id';
+  const ROLE_PRESET_PREF_KEY = 'grok2api_voice_role_preset_id';
+  const rolePresetSelect = document.getElementById('rolePresetSelect');
   const voiceSelect = document.getElementById('voiceSelect');
   const personalitySelect = document.getElementById('personalitySelect');
   const speedSelect = document.getElementById('speedSelect');
@@ -11,6 +14,10 @@
   const connectionText = document.getElementById('connectionText');
   const voiceOrb = document.getElementById('voiceOrb');
   const audioRoot = document.getElementById('audioRoot');
+  const chatkitThread = document.getElementById('chatkitThread');
+  const chatkitComposer = document.getElementById('chatkitComposer');
+  const chatkitPromptInput = document.getElementById('chatkitPromptInput');
+  const chatkitSendBtn = document.getElementById('chatkitSendBtn');
 
   let room = null;
   let micEnabled = true;
@@ -25,6 +32,34 @@
   let lastStatusState = '';
   let lastStatusLabel = '';
   let lastStatusDescription = '';
+  let chatkitMessageSeq = 0;
+  let chatkitSending = false;
+  const chatkitMessages = [];
+  const realtimeMessageByItemId = new Map();
+  let lastRealtimeItemId = null;
+  let lastRealtimeResponseAt = 0;
+  let voiceReadyResolver = null;
+  const VOICE_DEBUG = (() => {
+    try { return localStorage.getItem('grok2api_voice_debug') === '1'; } catch { return false; }
+  })();
+  const ROLE_PRESETS = [
+    { id: 'default', name: '官方默认', instruction: '' },
+    {
+      id: 'gentle_sister',
+      name: '温柔姐姐',
+      instruction: '你是一个温柔、成熟、自然的中文姐姐角色。用亲近、轻松、带一点撒娇但不过度的语气交流。回答要适合语音对话，简短、自然、有情绪，不要像书面报告。',
+    },
+    {
+      id: 'cool_oneesan',
+      name: '冷淡御姐',
+      instruction: '你是一个冷静、成熟、略带距离感的中文御姐角色。语气克制、简洁、可靠，偶尔展现温柔，但不要夸张撒娇。回答要适合语音对话。',
+    },
+    {
+      id: 'healing_companion',
+      name: '治愈陪伴',
+      instruction: '你是一个温柔、耐心、善于倾听的中文陪伴角色。优先安抚情绪，回答简短自然，像真实语音聊天一样给予回应和陪伴。',
+    },
+  ];
 
   const controlIcon = {
     start: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7.25 17 12l-8 4.75V7.25Z" fill="currentColor" stroke="none"/></svg>',
@@ -38,6 +73,379 @@
     if (typeof window.t !== 'function') return fallback;
     const value = t(key);
     return value === key ? fallback : value;
+  };
+
+  const escapeHtml = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const roleLabel = (role) => {
+    if (role === 'user') return text('webui.chatkit.userLabel', '你');
+    if (role === 'assistant') return 'Grok';
+    return text('webui.chatkit.systemLabel', '系统');
+  };
+
+  const scrollChatkitThread = () => {
+    if (!chatkitThread) return;
+    chatkitThread.scrollTop = chatkitThread.scrollHeight;
+  };
+
+  const renderChatkitMessages = () => {
+    if (!chatkitThread) return;
+    if (!chatkitMessages.length) {
+      chatkitThread.innerHTML = `<div class="webui-chatkit-empty">${escapeHtml(text('webui.chatkit.emptyThread', '文本消息和语音转录会显示在这里。'))}</div>`;
+      return;
+    }
+
+    chatkitThread.innerHTML = chatkitMessages.map((message) => {
+      const role = message.role === 'user' || message.role === 'assistant' ? message.role : 'system';
+      const partial = message.partial ? `<span class="webui-chatkit-partial">${escapeHtml(text('webui.chatkit.partial', '转录中'))}</span>` : '';
+      return `
+        <article class="webui-chatkit-message webui-chatkit-message-${role}">
+          <div class="webui-chatkit-message-meta">
+            <span>${escapeHtml(roleLabel(role))}</span>${partial}
+          </div>
+          <div class="webui-chatkit-message-body">${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>
+        </article>`;
+    }).join('');
+    scrollChatkitThread();
+  };
+
+  const upsertChatkitMessage = (role, content, options = {}) => {
+    const normalizedText = String(content || '').trim();
+    if (!normalizedText && !options.partial) return null;
+
+    const id = options.id || `chatkit-${++chatkitMessageSeq}`;
+    let message = chatkitMessages.find((item) => item.id === id);
+    if (!message) {
+      message = {
+        id,
+        role: role || 'system',
+        text: normalizedText,
+        partial: Boolean(options.partial),
+        timestamp: options.timestamp || Date.now(),
+      };
+      chatkitMessages.push(message);
+    } else {
+      message.role = role || message.role;
+      message.text = normalizedText || message.text;
+      message.partial = Boolean(options.partial);
+      message.timestamp = options.timestamp || message.timestamp;
+    }
+    renderChatkitMessages();
+    return message;
+  };
+
+  const appendChatkitMessage = (role, content, options = {}) => upsertChatkitMessage(
+    role,
+    content,
+    { ...options, id: options.id || `chatkit-${++chatkitMessageSeq}` },
+  );
+
+  const setChatkitSending = (sending) => {
+    chatkitSending = Boolean(sending);
+    if (chatkitSendBtn) chatkitSendBtn.disabled = chatkitSending;
+    if (chatkitPromptInput) chatkitPromptInput.disabled = chatkitSending;
+  };
+
+  const resizeChatkitInput = () => {
+    if (!chatkitPromptInput) return;
+    chatkitPromptInput.style.height = 'auto';
+    chatkitPromptInput.style.height = `${Math.min(132, chatkitPromptInput.scrollHeight)}px`;
+  };
+
+  const safeUrlHost = (value) => {
+    try {
+      return new URL(String(value || '')).host || '-';
+    } catch {
+      return '-';
+    }
+  };
+
+  const voiceDiagnostic = (message, details = {}) => {
+    if (!VOICE_DEBUG) return;
+    const suffix = Object.entries(details)
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(' ');
+    const textValue = suffix ? `${message} (${suffix})` : message;
+    appendChatkitMessage('system', textValue);
+    console.debug('[grok2api voice]', textValue);
+  };
+
+  const voiceErrorDiagnostic = (message, details = {}) => {
+    const suffix = Object.entries(details)
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(' ');
+    const textValue = suffix ? `${message} (${suffix})` : message;
+    console.error('[grok2api voice]', textValue);
+    if (VOICE_DEBUG) appendChatkitMessage('system', textValue);
+  };
+
+  const safeErrorDetails = (error) => {
+    if (!error) return {};
+    return {
+      name: error.name || error.constructor?.name || '',
+      message: error.message || String(error),
+      code: error.code || '',
+      reason: error.reason || '',
+      state: room?.state || '',
+      signalState: room?.engine?.client?.signalState || room?.engine?.signalState || '',
+      pcState: room?.engine?.pcManager?.currentState || room?.engine?.pcManager?.pc?.connectionState || '',
+      iceState: room?.engine?.pcManager?.pc?.iceConnectionState || '',
+      publisherState: room?.engine?.pcManager?.publisher?.getConnectionState?.() || '',
+      subscriberState: room?.engine?.pcManager?.subscriber?.getConnectionState?.() || '',
+      requiredTransports: Array.isArray(room?.engine?.pcManager?.requiredTransports)
+        ? room.engine.pcManager.requiredTransports.length
+        : '',
+      participants: room?.remoteParticipants?.size ?? '',
+      roomSid: typeof room?.getSid === 'function' ? '' : '',
+      cause: error.cause?.message || error.cause || '',
+    };
+  };
+
+  const voiceEventDiagnostic = (eventName, details = {}) => {
+    voiceDiagnostic(`LiveKit event: ${eventName}`, details);
+  };
+
+  const livekitJoinSummary = (currentRoom) => {
+    const join = currentRoom?.engine?.latestJoinResponse || {};
+    const roomInfo = join.room || {};
+    return {
+      roomName: roomInfo.name || currentRoom?.name || '',
+      roomSid: roomInfo.sid || '',
+      otherParticipants: Array.isArray(join.otherParticipants) ? join.otherParticipants.length : '',
+      iceServers: Array.isArray(join.iceServers) ? join.iceServers.length : '',
+      iceUrls: Array.isArray(join.iceServers)
+        ? join.iceServers
+          .flatMap((server) => Array.isArray(server.urls) ? server.urls : [server.urls])
+          .filter(Boolean)
+          .map((url) => String(url).replace(/([?&]credential=)[^&]+/g, '$1***'))
+          .join(',')
+        : '',
+      forceRelay: join.clientConfiguration?.forceRelay ?? '',
+      serverVersion: join.serverInfo?.version || '',
+    };
+  };
+
+  const normalizeComparableText = (value) => String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s。．.！？!?，,、~～]+/g, '');
+
+  const findDuplicateMessage = (role, textValue) => {
+    const comparable = normalizeComparableText(textValue);
+    if (!comparable) return null;
+    return chatkitMessages.find((message) => (
+      message.role === role
+      && normalizeComparableText(message.text) === comparable
+    )) || null;
+  };
+
+  const extractTextFromValue = (value) => {
+    if (typeof value === 'string') return value;
+    if (!value || typeof value !== 'object') return '';
+    for (const key of ['text', 'transcript', 'message', 'content', 'delta']) {
+      if (typeof value[key] === 'string' && value[key].trim()) return value[key];
+    }
+    if (Array.isArray(value.content)) {
+      return value.content.map(extractTextFromValue).filter(Boolean).join(' ');
+    }
+    if (Array.isArray(value.segments)) {
+      return value.segments.map(extractTextFromValue).filter(Boolean).join(' ');
+    }
+    if (Array.isArray(value.items)) {
+      return value.items.map(extractTextFromValue).filter(Boolean).join(' ');
+    }
+    return '';
+  };
+
+  const normalizeTranscriptRole = (payload, participant) => {
+    const rawRole = String(payload?.role || payload?.sender || payload?.speaker || '').toLowerCase();
+    if (rawRole.includes('assistant') || rawRole.includes('agent') || rawRole.includes('grok')) return 'assistant';
+    if (rawRole.includes('user') || rawRole.includes('human')) return 'user';
+    if (participant?.isLocal) return 'user';
+    return 'assistant';
+  };
+
+  const isPartialTranscript = (payload) => {
+    if (!payload || typeof payload !== 'object') return false;
+    if (typeof payload.final === 'boolean') return !payload.final;
+    if (typeof payload.isFinal === 'boolean') return !payload.isFinal;
+    if (typeof payload.partial === 'boolean') return payload.partial;
+    return false;
+  };
+
+  const handleTranscriptPayload = (payload, participant, fallbackIdPrefix = 'transcript') => {
+    const items = Array.isArray(payload) ? payload : [payload];
+    items.forEach((item, index) => {
+      const content = extractTextFromValue(item);
+      if (!content.trim()) return;
+      const role = normalizeTranscriptRole(item, participant);
+      const upstreamId = item && typeof item === 'object'
+        ? (item.id || item.segmentId || item.transcriptionId || item.messageId || '')
+        : '';
+      const id = `${fallbackIdPrefix}:${participant?.identity || role}:${upstreamId || index}`;
+      upsertChatkitMessage(role, content, {
+        id,
+        partial: isPartialTranscript(item),
+        timestamp: Date.now(),
+      });
+    });
+  };
+
+  const decodeDataPayload = (payload) => {
+    try {
+      if (payload instanceof Uint8Array || payload instanceof ArrayBuffer) {
+        const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+        return new TextDecoder('utf-8').decode(bytes);
+      }
+      return String(payload || '');
+    } catch {
+      return '';
+    }
+  };
+
+  const parseDataPayload = (payload) => {
+    const raw = decodeDataPayload(payload).trim();
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return raw; }
+  };
+
+  const realtimeTextFromContent = (content) => {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content.map(extractTextFromValue).filter(Boolean).join(' ').trim();
+  };
+
+  const updateRealtimeMessage = (role, itemId, content, partial = false) => {
+    const textValue = String(content || '').trim();
+    if (!textValue && !partial) return;
+    const mappedId = itemId ? realtimeMessageByItemId.get(itemId) : '';
+    const duplicate = textValue && !partial ? findDuplicateMessage(role, textValue) : null;
+    const id = mappedId || duplicate?.id || (itemId ? `realtime:${itemId}` : `realtime:${role}:${++chatkitMessageSeq}`);
+    realtimeMessageByItemId.set(itemId || id, id);
+    upsertChatkitMessage(role, textValue || '…', { id, partial, timestamp: Date.now() });
+  };
+
+  const appendRealtimeDelta = (itemId, delta) => {
+    const textValue = String(delta || '');
+    if (!textValue) return;
+    const id = realtimeMessageByItemId.get(itemId) || `realtime:${itemId || ++chatkitMessageSeq}`;
+    const existing = chatkitMessages.find((message) => message.id === id);
+    const nextText = `${existing?.text || ''}${textValue}`;
+    realtimeMessageByItemId.set(itemId || id, id);
+    upsertChatkitMessage('assistant', nextText, { id, partial: true, timestamp: Date.now() });
+  };
+
+  const finalizeRealtimeMessage = (itemId) => {
+    const id = realtimeMessageByItemId.get(itemId);
+    if (!id) return;
+    const existing = chatkitMessages.find((message) => message.id === id);
+    if (existing) upsertChatkitMessage(existing.role, existing.text, { id, partial: false, timestamp: Date.now() });
+  };
+
+  const handleRealtimeServerEvent = (event) => {
+    if (!event || typeof event !== 'object') return false;
+    const type = String(event.type || '');
+    if (
+      !type
+      || type === 'ping'
+      || type === 'rate_limits.updated'
+      || type === 'input_audio_buffer.speech_started'
+      || type === 'input_audio_buffer.speech_stopped'
+      || type === 'input_audio_buffer.committed'
+    ) return true;
+
+    if (type.startsWith('response.')) lastRealtimeResponseAt = Date.now();
+    if (event.previous_item_id) lastRealtimeItemId = event.previous_item_id;
+
+    if (type === 'conversation.created') {
+      if (voiceReadyResolver) {
+        voiceReadyResolver();
+        voiceReadyResolver = null;
+      }
+      return true;
+    }
+
+    if (type === 'session.updated') return true;
+
+    if (type === 'conversation.item.created' && event.item) {
+      const item = event.item;
+      if (item.id) lastRealtimeItemId = item.id;
+      const content = realtimeTextFromContent(item.content);
+      if (content) updateRealtimeMessage(item.role === 'user' ? 'user' : 'assistant', item.id, content, item.status === 'in_progress');
+      return true;
+    }
+
+    if (type === 'conversation.item.input_audio_transcription.completed') {
+      updateRealtimeMessage('user', event.item_id || event.event_id, event.transcript || '', false);
+      return true;
+    }
+
+    if (type === 'response.audio_transcript.delta' || type === 'response.output_text.delta' || type === 'response.text.delta') {
+      appendRealtimeDelta(event.item_id, event.delta || '');
+      return true;
+    }
+
+    if (type === 'response.audio_transcript.done' || type === 'response.output_text.done' || type === 'response.text.done') {
+      const doneText = event.transcript || event.text || '';
+      if (doneText) updateRealtimeMessage('assistant', event.item_id, doneText, false);
+      else finalizeRealtimeMessage(event.item_id);
+      return true;
+    }
+
+    if (type === 'response.audio.done' || type === 'response.output_item.done' || type === 'response.done') {
+      finalizeRealtimeMessage(event.item_id);
+      return true;
+    }
+
+    if (type === 'response.human_assist_turn.commit') {
+      const turn = event.human_assist_turn_response || {};
+      const userText = extractTextFromValue(turn.user);
+      const assistantText = extractTextFromValue(turn.assistant);
+      if (userText) updateRealtimeMessage('user', `${turn.id || event.event_id}:user`, userText, false);
+      if (assistantText) updateRealtimeMessage('assistant', `${turn.id || event.event_id}:assistant`, assistantText, false);
+      return true;
+    }
+
+    return true;
+  };
+
+  const handleDataPayload = (payload, participant, topic) => {
+    const parsed = parseDataPayload(payload);
+    if (!parsed) return;
+
+    const topicName = String(topic || '');
+    const events = Array.isArray(parsed) ? parsed : [parsed];
+    if (topicName === 'realtime_server_events') {
+      events.forEach(handleRealtimeServerEvent);
+      return;
+    }
+
+    events.forEach((item, index) => {
+      const eventType = item && typeof item === 'object' ? String(item.type || '') : '';
+      if (eventType === 'ping') return;
+      if (eventType.startsWith('response.') || eventType.startsWith('conversation.') || eventType.startsWith('input_audio_buffer.')) {
+        handleRealtimeServerEvent(item);
+        return;
+      }
+      const content = extractTextFromValue(item);
+      if (!content.trim()) return;
+      const role = normalizeTranscriptRole(item, participant);
+      const idPart = item && typeof item === 'object'
+        ? (item.id || item.messageId || item.segmentId || '')
+        : '';
+      upsertChatkitMessage(role, content, {
+        id: `data:${topicName || 'default'}:${participant?.identity || role}:${idPart || index}`,
+        partial: isPartialTranscript(item),
+        timestamp: Date.now(),
+      });
+    });
   };
 
   const setOrbLevel = (level) => {
@@ -230,6 +638,55 @@
     }
   };
 
+  const selectedVoiceId = () => String(voiceSelect?.value || 'ara').trim() || 'ara';
+
+  const selectedRolePreset = () => {
+    const id = String(rolePresetSelect?.value || 'default').trim() || 'default';
+    return ROLE_PRESETS.find((item) => item.id === id) || ROLE_PRESETS[0];
+  };
+
+  const applyRolePreset = (preset = selectedRolePreset()) => {
+    if (!instructionInput || !preset) return;
+    instructionInput.value = preset.instruction || '';
+    if (personalitySelect && preset.instruction) personalitySelect.value = 'custom';
+  };
+
+  const renderRolePresetOptions = () => {
+    if (!rolePresetSelect) return;
+    rolePresetSelect.innerHTML = ROLE_PRESETS
+      .map((preset) => `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`)
+      .join('');
+  };
+
+  const persistRolePresetPreference = () => {
+    try { localStorage.setItem(ROLE_PRESET_PREF_KEY, selectedRolePreset().id); } catch {}
+  };
+
+  const restoreRolePresetPreference = () => {
+    if (!rolePresetSelect) return;
+    try {
+      const stored = String(localStorage.getItem(ROLE_PRESET_PREF_KEY) || '').trim();
+      if (stored && ROLE_PRESETS.some((preset) => preset.id === stored)) {
+        rolePresetSelect.value = stored;
+      }
+    } catch {}
+    applyRolePreset();
+  };
+
+  const persistVoicePreference = () => {
+    try { localStorage.setItem(VOICE_PREF_KEY, selectedVoiceId()); } catch {}
+  };
+
+  const restoreVoicePreference = () => {
+    if (!voiceSelect) return;
+    try {
+      const stored = String(localStorage.getItem(VOICE_PREF_KEY) || '').trim();
+      if (stored && Array.from(voiceSelect.options).some((option) => option.value === stored)) {
+        voiceSelect.value = stored;
+      }
+    } catch {}
+  };
+
   const renderConnectedStatus = () => {
     if (!room) {
       setStatus(
@@ -327,7 +784,49 @@
     }
   };
 
+  const bindParticipantTranscriptEvents = (lk, participant) => {
+    if (!participant || !lk.ParticipantEvent?.TranscriptionReceived || participant.__grok2apiTranscriptBound) return;
+    participant.__grok2apiTranscriptBound = true;
+    participant.on(lk.ParticipantEvent.TranscriptionReceived, (segments, publication) => {
+      handleTranscriptPayload(segments, participant, `participant:${publication?.trackSid || participant.identity || 'unknown'}`);
+    });
+  };
+
   const bindRoomEvents = (lk, currentRoom) => {
+    currentRoom.remoteParticipants?.forEach?.((participant) => bindParticipantTranscriptEvents(lk, participant));
+
+    const bindEvent = (eventName, handler) => {
+      const eventValue = lk.RoomEvent?.[eventName];
+      if (!eventValue || typeof currentRoom.on !== 'function') return;
+      currentRoom.on(eventValue, handler);
+    };
+
+    bindEvent('ConnectionStateChanged', (state) => {
+      voiceEventDiagnostic('ConnectionStateChanged', { state });
+    });
+    bindEvent('SignalConnected', () => {
+      voiceEventDiagnostic('SignalConnected', {
+        state: currentRoom.state || '',
+        ...livekitJoinSummary(currentRoom),
+      });
+    });
+    bindEvent('Reconnecting', () => {
+      voiceEventDiagnostic('Reconnecting', { state: currentRoom.state || '' });
+    });
+    bindEvent('Reconnected', () => {
+      voiceEventDiagnostic('Reconnected', { state: currentRoom.state || '' });
+    });
+    bindEvent('MediaDevicesError', (error) => {
+      voiceEventDiagnostic('MediaDevicesError', safeErrorDetails(error));
+      console.error('[grok2api voice] media devices error', error);
+    });
+    bindEvent('ConnectionQualityChanged', (quality, participant) => {
+      voiceEventDiagnostic('ConnectionQualityChanged', {
+        quality,
+        participant: participant?.identity || '',
+      });
+    });
+
     currentRoom.on(lk.RoomEvent.TrackSubscribed, (track) => {
       addRemoteAudioTrack(track);
     });
@@ -347,13 +846,156 @@
       } catch {}
     });
 
+    if (lk.RoomEvent.ParticipantConnected) {
+      currentRoom.on(lk.RoomEvent.ParticipantConnected, (participant) => {
+        bindParticipantTranscriptEvents(lk, participant);
+      });
+    }
+
+    if (lk.RoomEvent.TranscriptionReceived) {
+      currentRoom.on(lk.RoomEvent.TranscriptionReceived, (segments, participant) => {
+        handleTranscriptPayload(segments, participant, 'transcript');
+      });
+    }
+
+    if (lk.RoomEvent.DataReceived) {
+      currentRoom.on(lk.RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+        handleDataPayload(payload, participant, topic || 'livekit');
+      });
+    }
+
     currentRoom.on(lk.RoomEvent.Disconnected, () => {
-      teardownSession(false);
+      voiceEventDiagnostic('Disconnected', safeErrorDetails(null));
+      if (lastStatusState === 'is-live') {
+        teardownSession(false);
+      }
     });
+  };
+
+  const remoteParticipantIdentities = () => {
+    if (!room?.remoteParticipants || typeof room.remoteParticipants.values !== 'function') return [];
+    return Array.from(room.remoteParticipants.values())
+      .map((participant) => participant.identity)
+      .filter(Boolean);
+  };
+
+  const waitForRemoteParticipant = async (timeoutMs = 5000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (remoteParticipantIdentities().length > 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return remoteParticipantIdentities().length > 0;
+  };
+
+  const waitForVoiceReady = async (timeoutMs = 30000) => {
+    if (lastRealtimeResponseAt > 0) return true;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (voiceReadyResolver) voiceReadyResolver = null;
+        resolve(false);
+      }, timeoutMs);
+      voiceReadyResolver = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+    });
+  };
+
+  const sendLiveKitText = async (content) => {
+    if (!room || !room.localParticipant) throw new Error(text('webui.chatkit.notConnected', '请先连接 Grok Voice'));
+    const agentReady = await waitForRemoteParticipant();
+    if (!agentReady) {
+      throw new Error(text('webui.chatkit.agentNotReady', 'Grok Voice Agent 尚未就绪，请稍后再发送'));
+    }
+    const participant = room.localParticipant;
+    if (typeof participant.publishData === 'function') {
+      const payload = new TextEncoder().encode(content);
+      const options = {
+        reliable: true,
+        topic: 'grok.chat',
+      };
+      try {
+        await participant.publishData(payload, options);
+      } catch (error) {
+        console.debug('Grok Voice text publish retry', error);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await participant.publishData(payload, options);
+      }
+      return true;
+    }
+    if (typeof participant.sendText === 'function') {
+      await participant.sendText(content, {
+        topic: 'lk.chat',
+        destinationIdentities: remoteParticipantIdentities(),
+      });
+      return true;
+    }
+    if (typeof participant.sendChatMessage === 'function') {
+      await participant.sendChatMessage(content, {
+        destinationIdentities: remoteParticipantIdentities(),
+      });
+      return true;
+    }
+    return false;
+  };
+
+  const stopVoicePing = () => {
+  };
+
+  const startVoicePing = () => {
+  };
+
+  const sendVoiceTextMessage = async (content) => {
+    const trimmed = String(content || '').trim();
+    if (!trimmed) return;
+
+    const baseline = lastRealtimeResponseAt;
+    const sentViaSdkText = await sendLiveKitText(trimmed).catch((error) => {
+      console.debug('LiveKit text stream failed', error);
+      return false;
+    });
+    if (!sentViaSdkText) {
+      throw new Error(text('webui.chatkit.dataUnavailable', '当前 Voice 会话不支持文本事件发送'));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 7000));
+    if (lastRealtimeResponseAt <= baseline) {
+      appendChatkitMessage('system', text(
+        'webui.chatkit.noTextResponse',
+        '文本已通过 Grok Voice 官方 grok.chat 通道发送，但暂未收到响应。',
+      ));
+    }
+  };
+
+  const submitChatkitText = async () => {
+    if (chatkitSending) return;
+    const content = String(chatkitPromptInput?.value || '').trim();
+    if (!content) return;
+
+    appendChatkitMessage('user', content);
+    if (chatkitPromptInput) {
+      chatkitPromptInput.value = '';
+      resizeChatkitInput();
+    }
+
+    setChatkitSending(true);
+    try {
+      await sendVoiceTextMessage(content);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      appendChatkitMessage('system', `${text('webui.chat.errors.requestFailed', 'Request failed')}: ${message}`);
+      showToast?.(message, 'error');
+    } finally {
+      setChatkitSending(false);
+    }
   };
 
   const teardownSession = async (manual) => {
     const currentRoom = room;
+    if (voiceReadyResolver) {
+      voiceReadyResolver = null;
+    }
+    stopVoicePing();
     room = null;
     try {
       if (currentRoom) await currentRoom.disconnect();
@@ -376,6 +1018,9 @@
     }
 
     if (startVoiceBtn) startVoiceBtn.disabled = true;
+    try {
+      if (lk.setLogLevel && lk.LogLevel) lk.setLogLevel(lk.LogLevel.error);
+    } catch {}
     void ensureOrbAudioContext();
     setStatus(
       'is-connecting',
@@ -386,16 +1031,15 @@
     try {
       const headers = await getAuthHeaders();
       headers['Content-Type'] = 'application/json';
-      const res = await fetch(VOICE_ENDPOINT, {
-        method: 'POST',
+      const params = new URLSearchParams({
+        voice: selectedVoiceId(),
+        personality: personalitySelect?.value || 'assistant',
+        speed: speedSelect?.value || '1',
+        instruction: instructionInput?.value?.trim() || '',
+      });
+      const res = await fetch(`${VOICE_ENDPOINT}?${params.toString()}`, {
         headers,
         cache: 'no-store',
-        body: JSON.stringify({
-          voice: voiceSelect?.value || 'ara',
-          personality: personalitySelect?.value || 'assistant',
-          speed: Number(speedSelect?.value || 1),
-          instruction: instructionInput?.value?.trim() || '',
-        }),
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
@@ -406,10 +1050,14 @@
       if (!payload || !payload.token || !payload.url) {
         throw new Error(text('webui.chatkit.invalidToken', 'Voice token response invalid'));
       }
+      const livekitHost = safeUrlHost(payload.url);
+      voiceDiagnostic('Voice token OK', {
+        urlHost: livekitHost,
+        tokenLen: String(payload.token || '').length,
+        room: payload.room_name ? 'yes' : 'no',
+      });
 
       const currentRoom = new lk.Room({
-        adaptiveStream: true,
-        dynacast: true,
         audioCaptureDefaults: {
           autoGainControl: true,
           echoCancellation: true,
@@ -419,8 +1067,19 @@
       room = currentRoom;
       bindRoomEvents(lk, currentRoom);
 
+      let micPublishError = null;
+      const micPublishPromise = currentRoom.localParticipant.setMicrophoneEnabled(true)
+        .catch((error) => {
+          micPublishError = error;
+          return null;
+        });
+      voiceDiagnostic('Microphone publish queued before connect');
+
+      voiceDiagnostic('LiveKit connect starting', { urlHost: livekitHost });
       await currentRoom.connect(payload.url, payload.token);
-      await currentRoom.localParticipant.setMicrophoneEnabled(true);
+      voiceDiagnostic('LiveKit connect completed', { urlHost: livekitHost });
+      await micPublishPromise;
+      if (micPublishError) throw micPublishError;
 
       micEnabled = true;
       outputMuted = false;
@@ -429,6 +1088,10 @@
       void syncLocalMicAnalysis(currentRoom);
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
+      const details = safeErrorDetails(error);
+      console.error('[grok2api voice] startSession failed', error, details);
+      appendChatkitMessage('system', `Voice connect failed: ${message}`);
+      voiceErrorDiagnostic('Voice connect error details', details);
       showToast?.(message, 'error');
       setStatus(
         'is-error',
@@ -474,7 +1137,24 @@
     await startSession();
   };
 
+  voiceSelect?.addEventListener('change', persistVoicePreference);
+  rolePresetSelect?.addEventListener('change', () => {
+    applyRolePreset();
+    persistRolePresetPreference();
+  });
+  chatkitComposer?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitChatkitText();
+  });
+  chatkitPromptInput?.addEventListener('input', resizeChatkitInput);
+  chatkitPromptInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void submitChatkitText();
+    }
+  });
   startVoiceBtn?.addEventListener('click', () => {
+    persistVoicePreference();
     void handlePrimaryAction();
   });
   muteVoiceBtn?.addEventListener('click', toggleOutputMute);
@@ -486,16 +1166,11 @@
     if (room) void room.disconnect();
   });
 
+  restoreVoicePreference();
+  renderRolePresetOptions();
+  restoreRolePresetPreference();
+  persistVoicePreference();
+  renderConnectedStatus();
   setButtons(false);
-  setStatus(
-    'is-idle',
-    text('webui.chatkit.statusIdle', '未连接'),
-    text('webui.chatkit.idleText', '点击并授权，通过 ChatKit 语音会话连接 Grok Voice。'),
-  );
-  if (typeof renderWebuiHeader === 'function') {
-    void renderWebuiHeader();
-  }
-  if (typeof renderSiteFooter === 'function') {
-    void renderSiteFooter();
-  }
+  renderChatkitMessages();
 })();

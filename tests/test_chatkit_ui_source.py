@@ -1,0 +1,96 @@
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CHATKIT_HTML = ROOT / "app" / "statics" / "webui" / "chatkit.html"
+CHATKIT_JS = ROOT / "app" / "statics" / "js" / "webui" / "chatkit.js"
+
+
+class ChatkitUiSourceTests(unittest.TestCase):
+    def test_chatkit_page_has_message_thread_and_text_composer(self):
+        html = CHATKIT_HTML.read_text(encoding="utf-8")
+
+        self.assertIn('id="chatkitThread"', html)
+        self.assertIn('id="chatkitPromptInput"', html)
+        self.assertIn('id="chatkitSendBtn"', html)
+        self.assertIn('id="rolePresetSelect"', html)
+
+    def test_chatkit_role_presets_only_manage_name_and_instruction(self):
+        source = CHATKIT_JS.read_text(encoding="utf-8")
+
+        self.assertIn("const ROLE_PRESETS = [", source)
+        self.assertIn("id: 'gentle_sister'", source)
+        self.assertIn("name: '温柔姐姐'", source)
+        self.assertIn("instruction: '你是一个温柔", source)
+        self.assertIn("const ROLE_PRESET_PREF_KEY = 'grok2api_voice_role_preset_id'", source)
+        self.assertIn("applyRolePreset();", source)
+        self.assertIn("if (personalitySelect && preset.instruction) personalitySelect.value = 'custom';", source)
+        self.assertNotIn("voice: 'eve'", source)
+        self.assertNotIn("speed: '1.0'", source)
+
+    def test_chatkit_js_uses_official_realtime_voice_events_for_text_and_filters_noise(self):
+        source = CHATKIT_JS.read_text(encoding="utf-8")
+
+        self.assertIn("RoomEvent.TranscriptionReceived", source)
+        self.assertIn("RoomEvent.DataReceived", source)
+        self.assertIn("ParticipantEvent.TranscriptionReceived", source)
+        self.assertIn("RoomEvent.ParticipantConnected", source)
+        self.assertNotIn("LIVEKIT_PROXY_ENDPOINT", source)
+        self.assertNotIn("livekitProxyUrl()", source)
+        self.assertIn("const params = new URLSearchParams({", source)
+        self.assertIn("fetch(`${VOICE_ENDPOINT}?${params.toString()}`", source)
+        self.assertIn("currentRoom.connect(payload.url, payload.token);", source)
+        self.assertIn("Microphone publish queued before connect", source)
+        self.assertLess(
+            source.index("currentRoom.localParticipant.setMicrophoneEnabled(true)"),
+            source.index("currentRoom.connect(payload.url, payload.token);"),
+        )
+        self.assertNotIn("currentRoom.connect(payload.url, payload.token, {", source)
+        self.assertNotIn("wss://livekit.grok.com", source)
+        self.assertNotIn("INPUT_AUDIO_ENDPOINT", source)
+        self.assertNotIn("publishSynthesizedInputTrack", source)
+        self.assertIn("const payload = new TextEncoder().encode(content)", source)
+        self.assertIn("participant.publishData(payload, options)", source)
+        self.assertIn("topic: 'grok.chat'", source)
+        self.assertIn("reliable: true", source)
+        self.assertIn("Grok Voice text publish retry", source)
+        self.assertNotIn("topic: 'grok.ping'", source)
+        self.assertIn("destinationIdentities: remoteParticipantIdentities()", source)
+        self.assertIn("participant.sendText(content, {", source)
+        self.assertIn("topic: 'lk.chat'", source)
+        self.assertIn("waitForRemoteParticipant", source)
+        self.assertIn("webui.chatkit.agentNotReady", source)
+        self.assertNotIn("preflightLiveKitUrl", source)
+        self.assertNotIn("currentRoom.prepareConnection(payload.url, payload.token)", source)
+        self.assertNotIn("peerConnectionTimeout: 30000", source)
+        self.assertNotIn("maxRetries: 2", source)
+        self.assertNotIn("connectRoomWithRetry", source)
+        self.assertNotIn("Grok Voice pc connection retry", source)
+        self.assertIn("conversation.created", source)
+        self.assertNotIn("adaptiveStream: true", source)
+        self.assertNotIn("dynacast: true", source)
+        self.assertNotIn("registerTextStreamHandler", source)
+        self.assertNotIn("'lk.transcription'", source)
+        self.assertIn("webui.chatkit.noTextResponse", source)
+        self.assertIn("normalizeComparableText", source)
+        self.assertIn("findDuplicateMessage", source)
+        self.assertNotIn("publishTrack(track", source)
+        self.assertNotIn("createMediaStreamDestination", source)
+        self.assertIn("sendText", source)
+        self.assertIn("sendChatMessage", source)
+        self.assertNotIn("realtime_client_events", source)
+        self.assertNotIn("publishRealtimeClientEvent", source)
+        self.assertNotIn("publishResponseCreateVariants", source)
+        self.assertNotIn("source: 'grok2api_chatkit_text'", source)
+        self.assertIn("response.human_assist_turn.commit", source)
+        self.assertIn("response.audio_transcript.delta", source)
+        self.assertIn("response.output_text.delta", source)
+        self.assertIn("conversation.item.input_audio_transcription.completed", source)
+        self.assertIn("input_audio_buffer.speech_started", source)
+        self.assertIn("type === 'ping'", source)
+        self.assertNotIn("fallbackSendChatMessage", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

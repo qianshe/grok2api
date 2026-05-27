@@ -28,6 +28,26 @@ def _capability_name(spec) -> str:
     return "chat"
 
 
+def _model_route(spec) -> str:
+    return "console" if spec.is_console() else "web"
+
+
+def _is_free_web_model(spec) -> bool:
+    return spec.is_chat() and not spec.is_console() and spec.pool_name() == "basic"
+
+
+def _supports_official_tts(spec) -> bool:
+    return _is_free_web_model(spec)
+
+
+def _model_badge(spec) -> str:
+    if spec.is_console():
+        return "Console"
+    if _is_free_web_model(spec):
+        return "Free Web"
+    return "Official Web"
+
+
 @router.get("/models")
 async def list_webui_models(request: Request):
     # Filter by account tier availability so the WebUI dropdown only shows
@@ -43,6 +63,10 @@ async def list_webui_models(request: Request):
             "owned_by": "xai",
             "name": spec.public_name,
             "capability": _capability_name(spec),
+            "route": _model_route(spec),
+            "badge": _model_badge(spec),
+            "free_web": _is_free_web_model(spec),
+            "official_tts": _supports_official_tts(spec),
         } for spec in model_registry.list_enabled() if _model_available_for_pools(spec, pools)
     ]
     return JSONResponse({"object": "list", "data": models})

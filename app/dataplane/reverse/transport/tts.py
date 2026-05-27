@@ -9,6 +9,7 @@ is a dict of the upstream response headers relevant for audio playback
 """
 
 from typing import AsyncGenerator, Optional
+import asyncio
 
 from app.control.proxy.models import ProxyFeedback, ProxyFeedbackKind, ProxyScope, RequestKind
 from app.dataplane.proxy import get_proxy_runtime
@@ -54,9 +55,12 @@ async def fetch_response_audio(
         headers that the caller should pass through to the browser.
     """
     cfg = get_config()
-    timeout_s = cfg.get_float("voice.tts_timeout", 60.0)
+    timeout_s = cfg.get_float("voice.tts_timeout", cfg.get_float("voice.timeout", 60.0))
+    prepare_retries = max(0, cfg.get_int("voice.tts_prepare_retries", 3))
+    prepare_delay_s = max(0.0, cfg.get_float("voice.tts_prepare_retry_delay", 1.0))
 
     url = f"{READ_RESPONSE_AUDIO}/{response_id}"
+    audio_url = f"{url}?voiceId={voice_id}"
     referer = (
         f"https://grok.com/c/{conversation_id}?rid={response_id}"
         if conversation_id
@@ -78,32 +82,77 @@ async def fetch_response_audio(
     headers["Sec-Fetch-Mode"] = "no-cors"
     headers["Sec-Fetch-Site"] = "same-origin"
     headers.pop("Content-Type", None)
-    if range_header:
-        headers["Range"] = range_header
+    headers["Range"] = range_header or "bytes=0-"
+
+    logger.info(
+        "tts upstream request: response_id={} voice_id={} range={} has_conversation={} referer={} url={}",
+        response_id,
+        voice_id,
+        headers.get("Range", "-"),
+        bool(conversation_id),
+        referer,
+        audio_url,
+    )
 
     kwargs = build_session_kwargs(lease=lease)
-    session = ResettableSession(**kwargs)
+    session: ResettableSession | None = None
 
     try:
-        response = await session.get(
-            url,
-            params={"voiceId": voice_id},
-            headers=headers,
-            timeout=timeout_s,
-            stream=True,
-            allow_redirects=True,
-        )
-        status = int(response.status_code)
-        if status not in (200, 206):
+        for attempt in range(prepare_retries + 1):
+            session = ResettableSession(**kwargs)
+            response = await session.get(
+                url,
+                params={"voiceId": voice_id},
+                headers=headers,
+                timeout=timeout_s,
+                stream=True,
+                allow_redirects=True,
+            )
+            status = int(response.status_code)
+            if status in (200, 206):
+                break
             try:
                 body = response.content.decode("utf-8", "replace")[:400]
             except Exception:
                 body = ""
+            raw_headers = getattr(response, "headers", {}) or {}
+            header_excerpt = {
+                str(key): str(value)
+                for key, value in raw_headers.items()
+                if str(key).lower() in {
+                    "content-type",
+                    "content-length",
+                    "content-range",
+                    "accept-ranges",
+                    "cache-control",
+                    "cf-ray",
+                    "server",
+                    "x-request-id",
+                    "x-xai-request-id",
+                }
+            }
+            is_empty_500 = (
+                status == 500
+                and not body
+                and str(header_excerpt.get("content-length", "")).strip() in {"", "0"}
+            )
+            if is_empty_500 and attempt < prepare_retries:
+                logger.warning(
+                    "tts upstream not ready, retrying: response_id={} voice_id={} attempt={}/{} headers={}",
+                    response_id, voice_id, attempt + 1, prepare_retries + 1, header_excerpt,
+                )
+                await session.close()
+                session = None
+                if prepare_delay_s > 0:
+                    await asyncio.sleep(prepare_delay_s)
+                continue
+
             logger.error(
-                "tts fetch failed: response_id={} status={} body={}",
-                response_id, status, body,
+                "tts fetch failed: response_id={} voice_id={} status={} headers={} body={}",
+                response_id, voice_id, status, header_excerpt, body,
             )
             await session.close()
+            session = None
             exc = UpstreamError(
                 f"TTS upstream returned {status}",
                 status=status,
@@ -115,7 +164,8 @@ async def fetch_response_audio(
         raise
     except Exception as exc:
         try:
-            await session.close()
+            if session is not None:
+                await session.close()
         except Exception:
             pass
         await proxy.feedback(lease, ProxyFeedback(kind=ProxyFeedbackKind.TRANSPORT_ERROR))
@@ -123,6 +173,15 @@ async def fetch_response_audio(
 
     forwarded: dict[str, str] = {}
     raw_headers = getattr(response, "headers", {}) or {}
+    logger.info(
+        "tts upstream success: response_id={} voice_id={} status={} content_type={} content_length={} content_range={}",
+        response_id,
+        voice_id,
+        status,
+        raw_headers.get("content-type") or raw_headers.get("Content-Type") or "-",
+        raw_headers.get("content-length") or raw_headers.get("Content-Length") or "-",
+        raw_headers.get("content-range") or raw_headers.get("Content-Range") or "-",
+    )
     for key, value in raw_headers.items():
         if key.lower() in _FORWARDED_RESPONSE_HEADERS:
             forwarded[key] = str(value)

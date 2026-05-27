@@ -4,12 +4,35 @@ import asyncio
 from typing import Any
 from urllib.parse import urlparse
 
-from curl_cffi.const import CurlOpt
+from curl_cffi.const import CurlECode, CurlOpt
 
 from app.platform.config.snapshot import get_config
 from app.platform.errors import UpstreamError
 from app.control.proxy.models import ProxyLease
 from app.dataplane.proxy.adapters.profile import resolve_proxy_profile
+
+
+_TLS_RETRY_MARKERS = (
+    "tls",
+    "ssl",
+    "handshake",
+    "unexpected eof",
+    "connection reset",
+    "recv failure",
+    "send failure",
+)
+_RETRYABLE_CURL_CODES = {
+    int(CurlECode.SSL_CONNECT_ERROR),
+    int(CurlECode.RECV_ERROR),
+    int(CurlECode.SEND_ERROR),
+    int(CurlECode.GOT_NOTHING),
+    int(CurlECode.COULDNT_CONNECT),
+    int(CurlECode.NO_CONNECTION_AVAILABLE),
+    int(CurlECode.HTTP2),
+    int(CurlECode.HTTP2_STREAM),
+    int(CurlECode.QUIC_CONNECT_ERROR),
+    int(CurlECode.AGAIN),
+}
 
 
 def _skip_proxy_ssl(proxy_url: str) -> bool:
@@ -79,6 +102,20 @@ def _wrap_transport_error(exc: BaseException) -> UpstreamError:
     )
 
 
+def _is_retryable_tls_error(exc: BaseException) -> bool:
+    code = getattr(exc, "code", None)
+    try:
+        if code is not None and int(code) in _RETRYABLE_CURL_CODES:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    text = str(exc).lower()
+    if any(marker in text for marker in _TLS_RETRY_MARKERS):
+        return True
+    return "ssl" in exc.__class__.__name__.lower()
+
+
 class ResettableSession:
     """AsyncSession wrapper that resets connection on configurable status codes.
 
@@ -127,14 +164,19 @@ class ResettableSession:
 
     async def _request(self, method: str, *args: Any, **kwargs: Any):
         await self._maybe_reset()
-        try:
-            response = await getattr(self._session, method)(*args, **kwargs)
-        except Exception as exc:
-            self._reset_pending = True
-            raise _wrap_transport_error(exc) from exc
-        if self._reset_on and response.status_code in self._reset_on:
-            self._reset_pending = True
-        return response
+        for attempt in range(2):
+            try:
+                response = await getattr(self._session, method)(*args, **kwargs)
+                if self._reset_on and response.status_code in self._reset_on:
+                    self._reset_pending = True
+                return response
+            except Exception as exc:
+                should_retry = attempt == 0 and _is_retryable_tls_error(exc)
+                self._reset_pending = True
+                if should_retry:
+                    await self._maybe_reset()
+                    continue
+                raise _wrap_transport_error(exc) from exc
 
     async def get(self, *args: Any, **kwargs: Any):
         return await self._request("get", *args, **kwargs)

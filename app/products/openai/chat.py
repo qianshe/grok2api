@@ -32,6 +32,7 @@ from app.dataplane.proxy.adapters.session import (
 )
 from app.dataplane.reverse.protocol.xai_chat import (
     build_chat_payload,
+    build_followup_chat_payload,
     classify_line,
     StreamAdapter,
 )
@@ -53,7 +54,7 @@ from app.dataplane.reverse.protocol.xai_console import (
     parse_console_error,
 )
 from app.dataplane.reverse.protocol.xai_usage import is_invalid_credentials_error
-from app.dataplane.reverse.runtime.endpoint_table import CHAT, CONSOLE_RESPONSES
+from app.dataplane.reverse.runtime.endpoint_table import CHAT, CHAT_CONVERSATIONS, CONSOLE_RESPONSES
 from app.dataplane.reverse.transport.asset_upload import upload_from_input
 from app.dataplane.reverse.protocol.tool_prompt import (
     build_tool_system_prompt,
@@ -192,7 +193,29 @@ def _configured_retry_codes(cfg) -> frozenset[int]:
 
 def _should_retry_upstream(exc: UpstreamError, retry_codes: frozenset[int]) -> bool:
     """Return whether this upstream error should switch to another token."""
-    return exc.status in retry_codes or is_invalid_credentials_error(exc)
+    return (
+        exc.status in retry_codes
+        or is_invalid_credentials_error(exc)
+        or _is_retryable_transport_error(exc)
+    )
+
+
+def _is_retryable_transport_error(exc: UpstreamError) -> bool:
+    """Retry transient curl/TLS transport failures surfaced as 502."""
+    if exc.status != 502:
+        return False
+    body = str(getattr(exc, "details", {}).get("body", "") or "")
+    message = str(getattr(exc, "message", "") or exc)
+    text = f"{message}\n{body}".lower()
+    return (
+        "curl:" in text
+        and (
+            "tls connect error" in text
+            or "ssl connect error" in text
+            or "connection reset" in text
+            or "connection aborted" in text
+        )
+    )
 
 
 def _feedback_kind(exc: BaseException) -> "FeedbackKind":
@@ -382,6 +405,8 @@ async def _stream_chat(
     tool_overrides: dict | None = None,
     model_config_override: dict | None = None,
     request_overrides: dict | None = None,
+    conversation_id: str | None = None,
+    parent_response_id: str | None = None,
     timeout_s: float = 120.0,
 ) -> AsyncGenerator[str, None]:
     """Yield raw SSE lines from the Grok app-chat endpoint."""
@@ -389,21 +414,36 @@ async def _stream_chat(
     lease = await proxy.acquire()
     attachments = await _prepare_file_attachments(token, files)
 
-    payload = build_chat_payload(
-        message=message,
-        mode_id=mode_id,
-        file_attachments=attachments,
-        tool_overrides=tool_overrides,
-        model_config_override=model_config_override,
-        request_overrides=request_overrides,
-    )
+    if conversation_id and parent_response_id:
+        payload = build_followup_chat_payload(
+            message=message,
+            mode_id=mode_id,
+            parent_response_id=parent_response_id,
+            file_attachments=attachments,
+            tool_overrides=tool_overrides,
+            model_config_override=model_config_override,
+            request_overrides=request_overrides,
+        )
+        chat_url = f"{CHAT_CONVERSATIONS}/{conversation_id}/responses"
+        referer = f"https://grok.com/c/{conversation_id}"
+    else:
+        payload = build_chat_payload(
+            message=message,
+            mode_id=mode_id,
+            file_attachments=attachments,
+            tool_overrides=tool_overrides,
+            model_config_override=model_config_override,
+            request_overrides=request_overrides,
+        )
+        chat_url = CHAT
+        referer = "https://grok.com/"
     payload_bytes = orjson.dumps(payload)
 
     headers = build_http_headers(
         token,
         content_type="application/json",
         origin="https://grok.com",
-        referer="https://grok.com/",
+        referer=referer,
         lease=lease,
     )
     session_kwargs = build_session_kwargs(lease=lease)
@@ -411,7 +451,7 @@ async def _stream_chat(
     async with ResettableSession(**session_kwargs) as session:
         try:
             response = await session.post(
-                CHAT,
+                chat_url,
                 headers=headers,
                 data=payload_bytes,
                 timeout=timeout_s,
@@ -942,6 +982,7 @@ async def completions(
     top_p: float = 0.95,
     reasoning_effort: str | None = None,
     request_overrides: dict | None = None,
+    metadata: dict | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for /v1/chat/completions.
 
@@ -995,6 +1036,43 @@ async def completions(
     retry_codes = _configured_retry_codes(cfg)
     response_id = make_response_id()
     timeout_s = cfg.get_float("chat.timeout", 120.0)
+    session_id = ""
+    if isinstance(metadata, dict):
+        raw_session_id = metadata.get("webui_session_id") or metadata.get("session_id")
+        if raw_session_id:
+            session_id = str(raw_session_id)
+    reuse_app_chat = bool(
+        session_id and cfg.get_bool("features.app_chat_reuse_conversation", False)
+    )
+
+    def _followup_ids_for(token_value: str, selected_mode_id: int) -> tuple[str | None, str | None]:
+        if not reuse_app_chat:
+            return None, None
+        from app.dataplane.reverse.runtime.chat_session import lookup as _lookup_chat_session
+
+        entry = _lookup_chat_session(session_id)
+        if (
+            entry is not None
+            and entry.token == token_value
+            and entry.model == model
+            and entry.mode_id == int(selected_mode_id)
+        ):
+            return entry.conversation_id, entry.parent_response_id
+        return None, None
+
+    def _record_followup_state(token_value: str, selected_mode_id: int, adapter: StreamAdapter) -> None:
+        if not reuse_app_chat or not adapter.upstream_conversation_id or not adapter.upstream_response_id:
+            return
+        from app.dataplane.reverse.runtime.chat_session import record as _record_chat_session
+
+        _record_chat_session(
+            session_id,
+            token=token_value,
+            model=model,
+            mode_id=int(selected_mode_id),
+            conversation_id=adapter.upstream_conversation_id,
+            parent_response_id=adapter.upstream_response_id,
+        )
 
     # ── Tool call setup ───────────────────────────────────────────────────────
     tool_names: list[str] = []
@@ -1031,11 +1109,25 @@ async def completions(
                         ended = False
                         sieve = ToolSieve(tool_names)
                         tool_calls_emitted = False
+                        followup_conversation_id, followup_parent_response_id = _followup_ids_for(
+                            token, selected_mode_id
+                        )
+                        adapter = StreamAdapter(conversation_id=followup_conversation_id or "")
+                        logger.info(
+                            "app-chat dispatch: model={} session_id={} followup={} conversation_id={} parent_response_id={}",
+                            model,
+                            session_id or "-",
+                            bool(followup_conversation_id and followup_parent_response_id),
+                            followup_conversation_id or "-",
+                            followup_parent_response_id or "-",
+                        )
                         async for line in _stream_chat(
                                 token=token,
                                 mode_id=ModeId(selected_mode_id),
                                 message=message,
                                 files=files,
+                                conversation_id=followup_conversation_id,
+                                parent_response_id=followup_parent_response_id,
                                 tool_overrides=tool_overrides,
                                 request_overrides=request_overrides,
                                 timeout_s=timeout_s,
@@ -1159,6 +1251,7 @@ async def completions(
                                 final["upstream_response_id"] = adapter.upstream_response_id
                                 if adapter.upstream_conversation_id:
                                     final["upstream_conversation_id"] = adapter.upstream_conversation_id
+                            _record_followup_state(token, selected_mode_id, adapter)
                             yield f"data: {orjson.dumps(final).decode()}\n\n"
                             yield "data: [DONE]\n\n"
                             success = True
@@ -1233,11 +1326,25 @@ async def completions(
 
         try:
             try:
+                followup_conversation_id, followup_parent_response_id = _followup_ids_for(
+                    token, selected_mode_id
+                )
+                adapter = StreamAdapter(conversation_id=followup_conversation_id or "")
+                logger.info(
+                    "app-chat dispatch: model={} session_id={} followup={} conversation_id={} parent_response_id={}",
+                    model,
+                    session_id or "-",
+                    bool(followup_conversation_id and followup_parent_response_id),
+                    followup_conversation_id or "-",
+                    followup_parent_response_id or "-",
+                )
                 async for line in _stream_chat(
                         token=token,
                         mode_id=ModeId(selected_mode_id),
                         message=message,
                         files=files,
+                        conversation_id=followup_conversation_id,
+                        parent_response_id=followup_parent_response_id,
                         tool_overrides=tool_overrides,
                         request_overrides=request_overrides,
                         timeout_s=timeout_s,
@@ -1374,6 +1481,7 @@ async def completions(
         response["upstream_response_id"] = adapter.upstream_response_id
         if adapter.upstream_conversation_id:
             response["upstream_conversation_id"] = adapter.upstream_conversation_id
+    _record_followup_state(token, selected_mode_id, adapter)
     return response
 
 
