@@ -70,9 +70,9 @@ async def _issue_voice_token(
     )
     if acct is None:
         raise RateLimitError("No available tokens for voice mode")
-    logger.info("voice account reserved via voice-capability path: token_prefix={}...", token[:8])
 
     token = acct.token
+    logger.info("voice account reserved via voice-capability path: token_prefix={}...", token[:8])
     try:
         from app.dataplane.reverse.transport.livekit import fetch_livekit_token
         data = await fetch_livekit_token(
