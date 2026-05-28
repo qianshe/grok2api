@@ -1,6 +1,7 @@
 (() => {
   const VOICE_ENDPOINT = '/webui/api/voice/token';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
+  const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
   const PERSONALITY_PREF_KEY = 'grok2api_voice_personality';
   const CUSTOM_PERSONALITIES_KEY = 'grok2api_voice_custom_personalities';
   const CUSTOM_DRAFT_KEY = 'grok2api_voice_custom_draft';
@@ -56,6 +57,7 @@
     mute: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10h3l4-4v12l-4-4H5z"/><path d="M16 9a4.5 4.5 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
     unmute: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10h3l4-4v12l-4-4H5z"/><path d="m16 9 5 6"/><path d="m21 9-5 6"/></svg>',
     newSession: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+    endSession: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12v8H6z"/><path d="M8 10v4"/><path d="M12 10v4"/><path d="M16 10v4"/></svg>',
   };
 
   const text = (key, fallback) => {
@@ -125,7 +127,41 @@
       message.timestamp = options.timestamp || message.timestamp;
     }
     renderChatkitMessages();
+    persistChatkitMessages();
     return message;
+  };
+
+  const persistChatkitMessages = () => {
+    try {
+      const payload = chatkitMessages.slice(-200).map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        partial: Boolean(message.partial),
+        timestamp: message.timestamp,
+      }));
+      localStorage.setItem(VOICE_HISTORY_KEY, JSON.stringify(payload));
+    } catch {}
+  };
+
+  const loadChatkitMessages = () => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(VOICE_HISTORY_KEY) || '[]');
+      if (!Array.isArray(raw)) return;
+      chatkitMessages.splice(0, chatkitMessages.length, ...raw
+        .map((item) => ({
+          id: String(item?.id || '').trim(),
+          role: item?.role === 'user' || item?.role === 'assistant' ? item.role : 'system',
+          text: String(item?.text || '').trim(),
+          partial: Boolean(item?.partial),
+          timestamp: Number(item?.timestamp || Date.now()),
+        }))
+        .filter((item) => item.id && item.text));
+      chatkitMessageSeq = chatkitMessages.reduce((max, item) => {
+        const match = String(item.id).match(/chatkit-(\d+)/);
+        return match ? Math.max(max, Number(match[1]) || 0) : max;
+      }, chatkitMessageSeq);
+    } catch {}
   };
 
   const appendChatkitMessage = (role, content, options = {}) => upsertChatkitMessage(
@@ -884,8 +920,10 @@
     }
     if (newSessionBtn) {
       newSessionBtn.disabled = !connected;
-      const label = text('webui.chatkit.newSession', '新会话');
-      newSessionBtn.innerHTML = controlIcon.newSession;
+      const label = connected
+        ? text('webui.chatkit.endSession', '结束会话')
+        : text('webui.chatkit.newSession', '新会话');
+      newSessionBtn.innerHTML = connected ? controlIcon.endSession : controlIcon.newSession;
       newSessionBtn.setAttribute('aria-label', label);
       newSessionBtn.setAttribute('title', label);
     }
@@ -1304,7 +1342,8 @@
   });
   muteVoiceBtn?.addEventListener('click', toggleOutputMute);
   newSessionBtn?.addEventListener('click', () => {
-    void startFreshSession();
+    if (!room) return;
+    void teardownSession(true);
   });
 
   window.addEventListener('beforeunload', () => {
@@ -1316,6 +1355,7 @@
     await renderSiteFooter?.();
     window.I18n?.apply?.(document);
     restoreVoicePreference();
+    loadChatkitMessages();
     loadCustomPersonalities();
     renderPersonalityOptions();
     restorePersonalityPreference();
