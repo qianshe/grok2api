@@ -6,6 +6,8 @@
   const STORE_KEY = 'grok2api_webui_chat_sessions_v1';
   const SIDEBAR_STORE_KEY = 'grok2api_webui_sidebar_collapsed_v1';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
+  const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
+  const VOICE_HISTORY_LIMIT = 8;
   const READ_ALOUD_ENABLED = false;
 
   const chatLayout = document.getElementById('chatLayout');
@@ -19,6 +21,8 @@
   const newChatBtn = document.getElementById('newChatBtn');
   const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
   const sessionList = document.getElementById('sessionList');
+  const voiceHistoryList = document.getElementById('voiceHistoryList');
+  const continueVoiceBtn = document.getElementById('continueVoiceBtn');
   const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('fileInput');
   const uploadMeta = document.getElementById('uploadMeta');
@@ -653,6 +657,73 @@
     try {
       localStorage.setItem(SIDEBAR_STORE_KEY, String(sidebarCollapsed));
     } catch {}
+  }
+
+  function openVoicePage() {
+    window.location.href = '/webui/chatkit';
+  }
+
+  function loadVoiceHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(VOICE_HISTORY_KEY) || '[]');
+      if (!Array.isArray(raw)) return [];
+      return raw
+        .map((item) => ({
+          role: item && ['user', 'assistant'].includes(item.role) ? item.role : 'system',
+          text: String(item && item.text || '').trim(),
+          timestamp: Number(item && item.timestamp) || 0,
+        }))
+        .filter((item) => item.text && item.role !== 'system')
+        .slice(-VOICE_HISTORY_LIMIT)
+        .reverse();
+    } catch {
+      return [];
+    }
+  }
+
+  function formatVoiceHistoryTime(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString(undefined, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  function renderVoiceHistory() {
+    if (!voiceHistoryList) return;
+    const history = loadVoiceHistory();
+    voiceHistoryList.dataset.empty = text('webui.chat.voiceHistoryEmpty', '暂无语音记录');
+    if (!history.length) {
+      voiceHistoryList.replaceChildren();
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    history.forEach((entry) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `webui-voice-history-item webui-voice-history-item-${entry.role}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'webui-voice-history-meta';
+      const role = entry.role === 'user' ? text('webui.chatkit.userLabel', '你') : 'Grok';
+      const timeValue = formatVoiceHistoryTime(entry.timestamp);
+      meta.textContent = timeValue ? `${role} · ${timeValue}` : role;
+
+      const body = document.createElement('div');
+      body.className = 'webui-voice-history-body';
+      body.textContent = entry.text;
+
+      item.appendChild(meta);
+      item.appendChild(body);
+      item.addEventListener('click', openVoicePage);
+      fragment.appendChild(item);
+    });
+    voiceHistoryList.replaceChildren(fragment);
   }
 
   function createSessionTitle(messagesList) {
@@ -1908,12 +1979,17 @@
     loadSidebarState();
     await loadModels();
     restoreSessions();
+    renderVoiceHistory();
     resizePromptInput();
     promptInput.focus();
   }
 
   newChatBtn?.addEventListener('click', startNewSession);
   sidebarToggleBtn.addEventListener('click', toggleSidebar);
+  continueVoiceBtn?.addEventListener('click', openVoicePage);
+  window.addEventListener('storage', (event) => {
+    if (event.key === VOICE_HISTORY_KEY) renderVoiceHistory();
+  });
   sendBtn.addEventListener('click', () => {
     if (sending) {
       stopMessage();

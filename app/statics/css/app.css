@@ -180,7 +180,8 @@ button{cursor:pointer}
 .webui-chatkit-custom-editor{display:grid;gap:8px;min-width:0}
 .webui-chatkit-instruction-input{
   height:auto;min-height:68px;max-height:128px;padding:10px 12px;border-radius:16px;resize:vertical;
-  line-height:1.45;white-space:normal;text-align:initial;text-align-last:initial;font-weight:600
+  line-height:1.45;white-space:normal;text-align:initial;text-align-last:initial;font-weight:600;
+  overflow-y:auto;scrollbar-width:thin
 }
 .webui-chatkit-custom-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .webui-chatkit-secondary-btn{height:30px;padding:0 12px;border-radius:999px;background:#f6f2ea;color:#2a2824;font-size:12px;font-weight:700}
@@ -479,6 +480,7 @@ button{cursor:pointer}
 .webui-chat-layout.sidebar-collapsed .webui-sidebar-new-btn,
 .webui-chat-layout.sidebar-collapsed .webui-sidebar-create,
 .webui-chat-layout.sidebar-collapsed .webui-sidebar-sessions,
+.webui-chat-layout.sidebar-collapsed .webui-sidebar-voice-history,
 .webui-chat-layout.sidebar-collapsed .webui-sidebar-settings{display:none}
 .webui-sidebar-create{
   height:42px;border-radius:12px;padding:0 14px;background:#ecebe7;color:#181816;
@@ -505,6 +507,28 @@ button{cursor:pointer}
 }
 .webui-session-action:hover{background:#e8e6e0;color:#1f1f1d}
 .webui-session-action svg{width:14px;height:14px}
+.webui-sidebar-voice-history{display:grid;gap:8px;min-height:0;padding-top:8px;border-top:1px solid rgba(31,28,24,.06)}
+.webui-voice-history-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 6px 0 10px}
+.webui-voice-history-title{font-size:12px;font-weight:800;color:#5f5a51;letter-spacing:.01em}
+.webui-voice-history-continue{
+  height:24px;padding:0 9px;border-radius:999px;background:#171511;color:#fff;
+  font-size:11px;font-weight:700
+}
+.webui-voice-history-list{display:grid;gap:4px;align-content:start;max-height:188px;overflow:auto;padding-right:4px}
+.webui-voice-history-list:empty::before{
+  content:attr(data-empty);padding:4px 10px;color:#a09d96;font-size:12px
+}
+.webui-voice-history-item{
+  min-height:42px;border-radius:10px;padding:7px 10px;background:transparent;color:#2d2c29;
+  text-align:left;display:grid;gap:3px
+}
+.webui-voice-history-item:hover{background:#efeeea}
+.webui-voice-history-meta{font-size:10px;font-weight:700;color:#8b867d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.webui-voice-history-body{
+  font-size:12px;line-height:1.35;color:#2d2c29;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden;word-break:break-word
+}
+.webui-voice-history-item-assistant .webui-voice-history-body{color:#4d4942}
 .webui-sidebar-settings{
   display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:8px;align-content:start;padding:0 8px 2px 12px
 }
