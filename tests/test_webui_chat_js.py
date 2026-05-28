@@ -50,11 +50,14 @@ class WebuiChatJsTests(unittest.TestCase):
         self.assertNotIn("· TTS", source)
         self.assertIn("modelRouteBadge(item)", source)
 
-    def test_read_aloud_button_is_hidden_in_ordinary_chat_ui(self):
+    def test_read_aloud_button_is_enabled_when_official_response_id_exists(self):
         source = CHAT_JS.read_text(encoding="utf-8")
 
-        self.assertIn("const READ_ALOUD_ENABLED = false;", source)
-        self.assertIn("const canReadAloud = READ_ALOUD_ENABLED && Boolean(String(entry.upstreamResponseId || '').trim())", source)
+        self.assertIn("const READ_ALOUD_ENABLED = true;", source)
+        self.assertIn("function currentModelMetadata()", source)
+        self.assertIn("function supportsReadAloudForModel(model)", source)
+        self.assertIn("model && model.route !== 'console'", source)
+        self.assertIn("supportsReadAloudForModel(currentModelMetadata())", source)
         self.assertIn("entry.speakBtn.hidden = !canReadAloud", source)
         self.assertIn("syncAssistantActions(assistantEntry)", source)
         self.assertIn("syncAssistantActions(entry)", source)

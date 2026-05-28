@@ -10,8 +10,13 @@
   const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
   const VOICE_SESSIONS_KEY = 'grok2api_voice_sessions_v1';
   const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context';
+  const PERSONALITY_PREF_KEY = 'grok2api_voice_personality';
+  const CUSTOM_PERSONALITIES_KEY = 'grok2api_voice_custom_personalities';
+  const CUSTOM_DRAFT_KEY = 'grok2api_voice_custom_draft';
+  const CUSTOM_NEW_VALUE = 'custom_new';
+  const CUSTOM_PERSONALITY_PREFIX = 'custom:';
   const VOICE_HISTORY_LIMIT = 8;
-  const READ_ALOUD_ENABLED = false;
+  const READ_ALOUD_ENABLED = true;
 
   const chatLayout = document.getElementById('chatLayout');
   const modelSelect = document.getElementById('modelSelect');
@@ -24,6 +29,13 @@
   const inputShell = document.querySelector('.webui-input-shell');
   const chatVoiceBtn = document.getElementById('chatVoiceBtn');
   const chatVoiceSelect = document.getElementById('chatVoiceSelect');
+  const chatVoicePersonalityPanel = document.getElementById('chatVoicePersonalityPanel');
+  const chatVoicePersonalitySelect = document.getElementById('chatVoicePersonalitySelect');
+  const chatVoiceInstructionPill = document.getElementById('chatVoiceInstructionPill');
+  const chatVoiceCustomPersonalityNameInput = document.getElementById('chatVoiceCustomPersonalityNameInput');
+  const chatVoiceInstructionInput = document.getElementById('chatVoiceInstructionInput');
+  const chatVoiceSaveCustomPersonalityBtn = document.getElementById('chatVoiceSaveCustomPersonalityBtn');
+  const chatVoiceDeleteCustomPersonalityBtn = document.getElementById('chatVoiceDeleteCustomPersonalityBtn');
   const newChatBtn = document.getElementById('newChatBtn');
   const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
   const sessionList = document.getElementById('sessionList');
@@ -61,9 +73,13 @@
   let chatVoiceRoom = null;
   let chatVoiceConnecting = false;
   let chatVoiceConnected = false;
+  let chatVoiceSending = false;
   let chatVoiceAssistantEntry = null;
   let chatVoiceAssistantKey = '';
   let chatVoiceLastSentText = '';
+  const chatVoiceRecentSentTexts = new Map();
+  let chatVoiceCommittedResponseIds = new Set();
+  let chatVoiceCustomPersonalities = [];
   const chatVoiceAudioElements = new Set();
 
   function text(key, fallback, params) {
@@ -689,6 +705,27 @@
     };
   }
 
+  function isDuplicateVoiceSessionMessage(messagesList, role, content, id = '') {
+    const normalized = String(content || '').trim();
+    if (!normalized) return true;
+    return messagesList.some((entry) => {
+      if (!entry || entry.role !== role) return false;
+      if (id && entry.id === id) return true;
+      return String(entry.text || '').trim() === normalized;
+    });
+  }
+
+  function dedupeVoiceHistoryMessages(items) {
+    const seen = new Set();
+    return (items || []).filter((entry) => {
+      if (!entry || !entry.text || entry.role === 'system') return false;
+      const key = `${entry.role}:${entry.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function createVoiceSessionTitle(items) {
     const first = (items || []).find((item) => item && item.role === 'user' && String(item.text || '').trim());
     const raw = String(first && first.text || '').trim().replace(/\s+/g, ' ');
@@ -707,7 +744,7 @@
 
   function normalizeVoiceSession(item) {
     const messagesList = Array.isArray(item && item.messages)
-      ? item.messages.map(normalizeVoiceMessage).filter((message) => message.id && message.text)
+      ? dedupeVoiceHistoryMessages(item.messages.map(normalizeVoiceMessage).filter((message) => message.id && message.text))
       : [];
     return {
       id: String(item && item.id || '').trim() || `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -766,9 +803,7 @@
     loadVoiceSessions();
     const session = voiceSessions.find((item) => item.id === sessionId) || currentVoiceSession();
     const raw = session ? session.messages : [];
-    return raw
-      .map(normalizeVoiceMessage)
-      .filter((item) => item.text && item.role !== 'system');
+    return dedupeVoiceHistoryMessages(raw.map(normalizeVoiceMessage));
   }
 
   function startNewVoiceSession() {
@@ -807,7 +842,11 @@
   function renderVoiceHistory() {
     if (!voiceHistoryList) return;
     loadVoiceSessions();
-    const visibleSessions = voiceSessions.slice(0, VOICE_HISTORY_LIMIT);
+    let visibleSessions = voiceSessions.slice(0, VOICE_HISTORY_LIMIT);
+    const currentSession = currentVoiceSession();
+    if (!visibleSessions.length && currentSession && Array.isArray(currentSession.messages) && currentSession.messages.some((entry) => entry && entry.role !== 'system' && String(entry.text || '').trim())) {
+      visibleSessions = [currentSession];
+    }
     voiceHistoryList.dataset.empty = text('webui.chat.voiceHistoryEmpty', '暂无语音记录');
     if (!visibleSessions.length) {
       voiceHistoryList.replaceChildren();
@@ -864,6 +903,19 @@
       .slice(-3000);
   }
 
+  function buildChatVoiceInstruction() {
+    const baseInstruction = selectedChatVoiceCustomInstruction();
+    const resumeTranscript = buildVoiceResumeText();
+    if (!resumeTranscript) return baseInstruction;
+    const resumeInstruction = [
+      'Continue the previous Grok Voice conversation using this recent transcript as context.',
+      `Keep the selected voice personality: ${selectedChatVoicePersonality()}.`,
+      'Recent transcript:',
+      resumeTranscript,
+    ].join('\n');
+    return baseInstruction ? `${baseInstruction}\n\n${resumeInstruction}` : resumeInstruction;
+  }
+
   function prepareVoiceResumeContext() {
     const transcript = buildVoiceResumeText();
     if (!transcript) return;
@@ -897,7 +949,7 @@
     if (existing) {
       existing.text = options.replace ? content : `${existing.text || ''}${content}`;
       existing.timestamp = Date.now();
-    } else {
+    } else if (!isDuplicateVoiceSessionMessage(messagesList, role, content, id)) {
       messagesList.push({ id, role, text: content, partial: Boolean(options.partial), timestamp: Date.now() });
     }
     const session = currentVoiceSession();
@@ -930,7 +982,7 @@
   function appendChatVoiceAssistant(delta, options = {}) {
     const content = String(delta || '');
     if (!content && !options.replace) return;
-    if (!chatVoiceAssistantEntry || (options.key !== chatVoiceAssistantKey && chatVoiceAssistantEntry.text)) {
+    if (!chatVoiceAssistantEntry || (!options.replace && options.key !== chatVoiceAssistantKey && chatVoiceAssistantEntry.text)) {
       chatVoiceAssistantEntry = createChatVoiceBubble('assistant', '');
     }
     chatVoiceAssistantKey = options.key || chatVoiceAssistantKey || `voice-assistant-${Date.now()}`;
@@ -968,6 +1020,31 @@
     return '';
   }
 
+  function normalizeChatVoiceSentText(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ');
+  }
+
+  function rememberChatVoiceSentText(value) {
+    const key = normalizeChatVoiceSentText(value);
+    if (!key) return;
+    const expiresAt = Date.now() + 30000;
+    chatVoiceRecentSentTexts.set(key, expiresAt);
+    window.setTimeout(() => {
+      if (chatVoiceRecentSentTexts.get(key) === expiresAt) chatVoiceRecentSentTexts.delete(key);
+    }, 31000);
+  }
+
+  function isRecentChatVoiceSentText(value) {
+    const key = normalizeChatVoiceSentText(value);
+    if (!key) return false;
+    const expiresAt = chatVoiceRecentSentTexts.get(key) || 0;
+    if (expiresAt <= Date.now()) {
+      chatVoiceRecentSentTexts.delete(key);
+      return false;
+    }
+    return true;
+  }
+
   function handleChatVoiceEvent(event) {
     const type = String(event?.type || '');
     if (!type || type === 'ping') return;
@@ -975,7 +1052,7 @@
       const item = event.item || {};
       const role = String(item.role || '').toLowerCase();
       const content = extractVoiceEventText(item).trim();
-      if (role === 'user' && content && content !== chatVoiceLastSentText) {
+      if (role === 'user' && content && !isRecentChatVoiceSentText(content)) {
         createChatVoiceBubble('user', content);
         appendVoiceSessionMessage('user', content, { id: item.id || `voice-user-${Date.now()}` });
       }
@@ -991,25 +1068,35 @@
       return;
     }
     if (type === 'response.audio_transcript.done') {
+      const responseId = String(event.response_id || '').trim();
       appendChatVoiceAssistant(event.transcript || '', {
-        key: event.item_id || event.response_id || chatVoiceAssistantKey,
+        key: event.item_id || responseId || chatVoiceAssistantKey,
         replace: Boolean(event.transcript),
         final: true,
       });
+      if (responseId) chatVoiceCommittedResponseIds.add(responseId);
       return;
     }
     if (type === 'response.human_assist_turn.commit') {
+      const responseId = String(event.response_id || '').trim();
+      if (responseId && chatVoiceCommittedResponseIds.has(responseId)) return;
       const turn = event.human_assist_turn_response || {};
       const userText = String(turn.user?.transcript || '').trim();
       const assistantText = String(turn.assistant?.transcript || '').trim();
-      if (userText) appendVoiceSessionMessage('user', userText, { id: `${event.response_id || Date.now()}:user` });
+      if (userText) {
+        if (!isDuplicateVoiceSessionMessage(currentVoiceMessages(), 'user', userText, `${responseId || Date.now()}:user`)) {
+          appendVoiceSessionMessage('user', userText, { id: `${responseId || Date.now()}:user` });
+        }
+      }
       if (assistantText) {
+        const assistantKey = chatVoiceAssistantEntry ? chatVoiceAssistantKey : (responseId || chatVoiceAssistantKey);
         appendChatVoiceAssistant(assistantText, {
-          key: event.response_id || chatVoiceAssistantKey,
+          key: assistantKey,
           replace: true,
           final: true,
         });
       }
+      if (responseId) chatVoiceCommittedResponseIds.add(responseId);
     }
   }
 
@@ -1093,6 +1180,10 @@
       return false;
     }
     persistChatVoicePreference();
+    persistChatVoicePersonalityPreference();
+    chatVoiceCommittedResponseIds = new Set();
+    chatVoiceAssistantEntry = null;
+    chatVoiceAssistantKey = '';
     chatVoiceConnecting = true;
     renderChatVoiceUi();
     setStatus(text('webui.chat.voiceConnecting', '正在连接 Grok Voice...'));
@@ -1104,9 +1195,9 @@
       headers['Content-Type'] = 'application/json';
       const params = new URLSearchParams({
         voice: selectedChatVoiceId(),
-        personality: 'assistant',
+        personality: selectedChatVoicePersonality(),
         speed: '1',
-        instruction: buildVoiceResumeText(),
+        instruction: buildChatVoiceInstruction(),
       });
       const res = await fetch(`${VOICE_ENDPOINT}?${params.toString()}`, { headers, cache: 'no-store' });
       if (!res.ok) {
@@ -1149,27 +1240,29 @@
   }
 
   async function sendChatVoiceText() {
-    if (sending) return;
+    if (sending || chatVoiceSending) return;
     const prompt = (promptInput.value || '').trim();
     if (!prompt) {
       toast(text('webui.chat.errors.enterPrompt', 'Please enter a message'), 'error');
       return;
     }
-    if (!chatVoiceConnected && !await startChatVoiceSession()) return;
-    const agentReady = await waitForChatVoiceAgent();
-    if (!agentReady) {
-      toast(text('webui.chatkit.agentNotReady', 'Grok Voice Agent 尚未就绪，请稍后再发送'), 'error');
-      return;
-    }
-    chatVoiceLastSentText = prompt;
-    window.setTimeout(() => {
-      if (chatVoiceLastSentText === prompt) chatVoiceLastSentText = '';
-    }, 4000);
-    createChatVoiceBubble('user', prompt);
-    appendVoiceSessionMessage('user', prompt);
-    promptInput.value = '';
-    resizePromptInput();
+    chatVoiceSending = true;
     try {
+      if (!chatVoiceConnected && !await startChatVoiceSession()) return;
+      const agentReady = await waitForChatVoiceAgent();
+      if (!agentReady) {
+        toast(text('webui.chatkit.agentNotReady', 'Grok Voice Agent 尚未就绪，请稍后再发送'), 'error');
+        return;
+      }
+      chatVoiceLastSentText = prompt;
+      rememberChatVoiceSentText(prompt);
+      window.setTimeout(() => {
+        if (chatVoiceLastSentText === prompt) chatVoiceLastSentText = '';
+      }, 30000);
+      createChatVoiceBubble('user', prompt);
+      appendVoiceSessionMessage('user', prompt);
+      promptInput.value = '';
+      resizePromptInput();
       const payload = new TextEncoder().encode(prompt);
       const options = { reliable: true, topic: 'grok.chat' };
       await chatVoiceRoom.localParticipant.publishData(payload, options);
@@ -1178,6 +1271,8 @@
       const message = error && error.message ? error.message : String(error);
       toast(message, 'error');
       setStatus(`${text('webui.chat.errors.requestFailed', 'Request failed')}: ${message}`);
+    } finally {
+      chatVoiceSending = false;
     }
   }
 
@@ -1512,6 +1607,163 @@
     } catch {}
   }
 
+  function normalizeChatVoicePersonality(entry) {
+    const id = String(entry?.id || '').trim();
+    const name = String(entry?.name || '').trim();
+    const instruction = String(entry?.instruction || '').trim();
+    if (!id || !name || !instruction) return null;
+    return { id, name, instruction };
+  }
+
+  function customChatVoicePersonalityValue(id) {
+    return `${CUSTOM_PERSONALITY_PREFIX}${id}`;
+  }
+
+  function isCustomChatVoicePersonalityValue(value) {
+    return String(value || '').startsWith(CUSTOM_PERSONALITY_PREFIX);
+  }
+
+  function selectedChatVoicePersonalityValue() {
+    return String(chatVoicePersonalitySelect?.value || 'assistant').trim() || 'assistant';
+  }
+
+  function selectedChatVoiceCustomPersonalityId() {
+    const value = selectedChatVoicePersonalityValue();
+    return isCustomChatVoicePersonalityValue(value) ? value.slice(CUSTOM_PERSONALITY_PREFIX.length) : '';
+  }
+
+  function selectedChatVoiceCustomPersonality() {
+    const id = selectedChatVoiceCustomPersonalityId();
+    return chatVoiceCustomPersonalities.find((item) => item.id === id) || null;
+  }
+
+  function selectedChatVoicePersonality() {
+    const value = selectedChatVoicePersonalityValue();
+    return value === CUSTOM_NEW_VALUE || isCustomChatVoicePersonalityValue(value) ? 'assistant' : value;
+  }
+
+  function selectedChatVoiceCustomInstruction() {
+    const saved = selectedChatVoiceCustomPersonality();
+    if (saved) return saved.instruction;
+    return String(chatVoiceInstructionInput?.value || '').trim();
+  }
+
+  function selectedChatVoiceCustomName() {
+    const saved = selectedChatVoiceCustomPersonality();
+    if (saved) return saved.name;
+    return String(chatVoiceCustomPersonalityNameInput?.value || '').trim();
+  }
+
+  function loadChatVoiceCustomPersonalities() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CUSTOM_PERSONALITIES_KEY) || '[]');
+      chatVoiceCustomPersonalities = Array.isArray(parsed)
+        ? parsed.map(normalizeChatVoicePersonality).filter(Boolean)
+        : [];
+    } catch {
+      chatVoiceCustomPersonalities = [];
+    }
+  }
+
+  function saveChatVoiceCustomPersonalities() {
+    try { localStorage.setItem(CUSTOM_PERSONALITIES_KEY, JSON.stringify(chatVoiceCustomPersonalities)); } catch {}
+  }
+
+  function createChatVoiceCustomPersonalityId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function persistChatVoiceCustomDraft() {
+    try {
+      localStorage.setItem(CUSTOM_DRAFT_KEY, JSON.stringify({
+        name: String(chatVoiceCustomPersonalityNameInput?.value || ''),
+        instruction: String(chatVoiceInstructionInput?.value || ''),
+      }));
+    } catch {}
+  }
+
+  function restoreChatVoiceCustomDraft() {
+    const saved = selectedChatVoiceCustomPersonality();
+    if (saved) {
+      if (chatVoiceCustomPersonalityNameInput) chatVoiceCustomPersonalityNameInput.value = saved.name;
+      if (chatVoiceInstructionInput) chatVoiceInstructionInput.value = saved.instruction;
+      return;
+    }
+    try {
+      const draft = JSON.parse(localStorage.getItem(CUSTOM_DRAFT_KEY) || '{}');
+      if (chatVoiceCustomPersonalityNameInput) chatVoiceCustomPersonalityNameInput.value = String(draft?.name || '');
+      if (chatVoiceInstructionInput) chatVoiceInstructionInput.value = String(draft?.instruction || '');
+    } catch {
+      if (chatVoiceCustomPersonalityNameInput) chatVoiceCustomPersonalityNameInput.value = '';
+      if (chatVoiceInstructionInput) chatVoiceInstructionInput.value = '';
+    }
+  }
+
+  function renderChatVoicePersonalityOptions() {
+    if (!chatVoicePersonalitySelect) return;
+    chatVoicePersonalitySelect.querySelectorAll(`option[value^="${CUSTOM_PERSONALITY_PREFIX}"]`).forEach((option) => option.remove());
+    chatVoiceCustomPersonalities.forEach((item) => {
+      const anchor = chatVoicePersonalitySelect.querySelector(`option[value="${CUSTOM_NEW_VALUE}"]`);
+      const option = document.createElement('option');
+      option.value = customChatVoicePersonalityValue(item.id);
+      option.textContent = item.name;
+      if (anchor) chatVoicePersonalitySelect.insertBefore(option, anchor); else chatVoicePersonalitySelect.appendChild(option);
+    });
+  }
+
+  function renderChatVoiceInstructionVisibility() {
+    const enabled = Boolean(chatVoiceConnected);
+    if (chatVoicePersonalityPanel) chatVoicePersonalityPanel.hidden = !enabled;
+    if (chatVoiceInstructionPill) chatVoiceInstructionPill.hidden = true;
+  }
+
+  function persistChatVoicePersonalityPreference() {
+    try { localStorage.setItem(PERSONALITY_PREF_KEY, String(chatVoicePersonalitySelect?.value || 'assistant')); } catch {}
+  }
+
+  function restoreChatVoicePersonalityPreference() {
+    if (!chatVoicePersonalitySelect) return;
+    try {
+      const stored = String(localStorage.getItem(PERSONALITY_PREF_KEY) || '').trim();
+      if (stored && Array.from(chatVoicePersonalitySelect.options).some((option) => option.value === stored)) {
+        chatVoicePersonalitySelect.value = stored;
+      }
+    } catch {}
+    renderChatVoiceInstructionVisibility();
+  }
+
+  function saveSelectedChatVoiceCustomPersonality() {
+    const name = selectedChatVoiceCustomName();
+    const instruction = String(chatVoiceInstructionInput?.value || '').trim();
+    if (!name || !instruction) {
+      toast('请先填写个性名称和 Instruction', 'error');
+      return;
+    }
+    const currentId = selectedChatVoiceCustomPersonalityId();
+    const id = currentId || createChatVoiceCustomPersonalityId();
+    const next = { id, name, instruction };
+    const index = chatVoiceCustomPersonalities.findIndex((item) => item.id === id);
+    if (index >= 0) chatVoiceCustomPersonalities[index] = next;
+    else chatVoiceCustomPersonalities.push(next);
+    saveChatVoiceCustomPersonalities();
+    renderChatVoicePersonalityOptions();
+    if (chatVoicePersonalitySelect) chatVoicePersonalitySelect.value = customChatVoicePersonalityValue(id);
+    persistChatVoicePersonalityPreference();
+    renderChatVoiceInstructionVisibility();
+  }
+
+  function deleteSelectedChatVoiceCustomPersonality() {
+    const selected = selectedChatVoiceCustomPersonality();
+    if (!selected) return;
+    chatVoiceCustomPersonalities = chatVoiceCustomPersonalities.filter((item) => item.id !== selected.id);
+    saveChatVoiceCustomPersonalities();
+    renderChatVoicePersonalityOptions();
+    if (chatVoicePersonalitySelect) chatVoicePersonalitySelect.value = 'assistant';
+    persistChatVoicePersonalityPreference();
+    renderChatVoiceInstructionVisibility();
+  }
+
   async function ensureAccess() {
     const stored = await webuiKey.get();
     if (stored && await verifyKey(VERIFY_ENDPOINT, stored)) return true;
@@ -1563,6 +1815,7 @@
         ? '输入文本，Grok 将以语音回复；也可直接说话'
         : text('webui.chat.promptPlaceholder', '输入你的问题，Enter 发送，Shift+Enter 换行');
     }
+    renderChatVoiceInstructionVisibility();
   }
 
   function setSending(next) {
@@ -1636,6 +1889,16 @@
       ? availableModels.find((item) => item && item.id === modelSelect.value)
       : null;
     return selected && selected.capability ? selected.capability : 'chat';
+  }
+
+  function currentModelMetadata() {
+    const session = getCurrentSession();
+    const modelId = String((session && session.model) || (modelSelect && modelSelect.value) || PREFERRED_MODEL).trim();
+    return availableModels.find((item) => item && item.id === modelId) || null;
+  }
+
+  function supportsReadAloudForModel(model) {
+    return Boolean(model && model.route !== 'console');
   }
 
   async function fileToDataUrl(file) {
@@ -2018,7 +2281,9 @@
     if (entry.likeBtn) entry.likeBtn.classList.toggle('active', Boolean(message && message.feedback === 'up'));
     if (entry.dislikeBtn) entry.dislikeBtn.classList.toggle('active', Boolean(message && message.feedback === 'down'));
     if (entry.speakBtn) {
-      const canReadAloud = READ_ALOUD_ENABLED && Boolean(String(entry.upstreamResponseId || '').trim());
+      const canReadAloud = READ_ALOUD_ENABLED
+        && supportsReadAloudForModel(currentModelMetadata())
+        && Boolean(String(entry.upstreamResponseId || '').trim());
       entry.speakBtn.hidden = !canReadAloud;
       entry.speakBtn.disabled = !canReadAloud;
       entry.speakBtn.setAttribute('aria-hidden', canReadAloud ? 'false' : 'true');
@@ -2026,7 +2291,7 @@
         'title',
         canReadAloud
           ? text('webui.chat.readAloud', 'Read aloud')
-          : text('webui.chat.readAloudUnavailable', 'Read-aloud unavailable for this message')
+          : text('webui.chat.readAloudUnavailable', 'Read-aloud unavailable for this model')
       );
     }
   }
@@ -2557,6 +2822,9 @@
     loadSidebarState();
     await loadModels();
     restoreChatVoicePreference();
+    loadChatVoiceCustomPersonalities();
+    renderChatVoicePersonalityOptions();
+    restoreChatVoicePersonalityPreference();
     restoreSessions();
     renderVoiceHistory();
     renderChatVoiceUi();
@@ -2592,6 +2860,16 @@
   chatVoiceSelect?.addEventListener('change', () => {
     void restartChatVoiceSessionForVoiceChange();
   });
+  chatVoicePersonalitySelect?.addEventListener('change', () => {
+    restoreChatVoiceCustomDraft();
+    persistChatVoicePersonalityPreference();
+    renderChatVoiceInstructionVisibility();
+    void restartChatVoiceSessionForVoiceChange();
+  });
+  chatVoiceInstructionInput?.addEventListener('input', persistChatVoicePersonalityPreference);
+  chatVoiceCustomPersonalityNameInput?.addEventListener('input', persistChatVoicePersonalityPreference);
+  chatVoiceSaveCustomPersonalityBtn?.addEventListener('click', saveSelectedChatVoiceCustomPersonality);
+  chatVoiceDeleteCustomPersonalityBtn?.addEventListener('click', deleteSelectedChatVoiceCustomPersonality);
   window.addEventListener('beforeunload', () => {
     if (chatVoiceRoom) void chatVoiceRoom.disconnect();
   });

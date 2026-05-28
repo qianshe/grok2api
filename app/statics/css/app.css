@@ -829,9 +829,70 @@ button{cursor:pointer}
 .webui-chat-voice-btn.is-live{background:#111;color:#fff;box-shadow:0 10px 24px rgba(17,17,17,.16)}
 .webui-input-shell.is-voice-mode .webui-sendbar-model{display:none}
 .webui-input-shell.is-voice-mode .webui-sendbar-voice{display:grid}
+.webui-input-shell.is-voice-mode .webui-chat-voice-personality{display:grid}
 .webui-input-shell.is-voice-mode{
   box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 12px 36px rgba(32,29,25,.08)
 }
+.webui-chat-voice-personality{
+  display:none;
+  min-width:132px;
+  max-width:180px;
+  flex:0 1 160px;
+}
+.webui-chat-voice-pill{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+.webui-chat-voice-pill-label{
+  min-width:44px;
+  color:#6f6860;
+  font-size:12px;
+  font-weight:700;
+  white-space:nowrap;
+}
+.webui-chat-voice-pill-input{
+  height:36px;
+  border:0;
+  border-radius:999px;
+  background:rgba(255,255,255,.42);
+  box-shadow:none;
+  padding-left:12px;
+  padding-right:22px;
+  color:#201d19;
+  font-size:12px;
+  font-weight:650;
+  letter-spacing:-.01em;
+}
+.webui-chat-voice-custom{
+  display:grid;
+  gap:8px;
+  padding:10px 12px 2px;
+  border-radius:18px;
+  background:rgba(255,255,255,.34);
+}
+.webui-chat-voice-custom-header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.webui-chat-voice-custom-editor{display:grid;gap:8px}
+.webui-chat-voice-instruction-input{
+  min-height:80px;
+  max-height:132px;
+  overflow-y:auto;
+  resize:none !important;
+  scrollbar-width:thin;
+}
+.webui-chat-voice-custom-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.webui-chat-voice-secondary-btn{
+  height:30px;
+  padding:0 12px;
+  border-radius:999px;
+  background:#f4efe6;
+  color:#26211b;
+  font-size:12px;
+  font-weight:700;
+}
+.webui-chat-voice-secondary-btn:hover{background:#eae3d8}
 @keyframes webui-voice-pulse{
   0%,100%{transform:scale(1)}
   50%{transform:scale(.94)}
@@ -1123,6 +1184,9 @@ textarea.input.webui-textarea{padding:8px 0 !important;resize:none !important}
   .webui-sendbar{justify-content:flex-end}
   .webui-sendbar-model{min-width:0;max-width:none;flex:1 1 auto}
   .webui-sendbar-voice{min-width:82px;max-width:96px;flex:0 0 88px}
+  .webui-chat-voice-personality{min-width:118px;max-width:152px;flex:1 1 132px}
+  .webui-chat-voice-pill{grid-template-columns:1fr;gap:6px}
+  .webui-chat-voice-pill-label{min-width:0}
   .webui-sidebar-headtitle{font-size:17px}
   .webui-masonry-main{height:calc(100dvh - 88px);padding:14px 12px 18px;overflow:hidden}
   .webui-masonry-shell{height:100%;min-height:0;gap:14px}
