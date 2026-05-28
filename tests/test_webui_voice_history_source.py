@@ -33,6 +33,7 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         self.assertIn("function renderVoiceHistory", source)
         self.assertIn("function renderVoiceHistoryThread", source)
         self.assertIn("function prepareVoiceResumeContext", source)
+        self.assertNotIn("loadVoiceHistory().slice().reverse()", source)
         self.assertIn("function startNewVoiceSession", source)
         self.assertIn("function deleteVoiceSession", source)
         self.assertIn("function startChatVoiceSession", source)

@@ -857,7 +857,7 @@
   }
 
   function buildVoiceResumeText() {
-    const history = loadVoiceHistory().slice().reverse();
+    const history = loadVoiceHistory();
     return history
       .map((entry) => `${entry.role === 'user' ? '用户' : 'Grok'}: ${entry.text}`)
       .join('\n')
@@ -1191,7 +1191,7 @@
 
   function renderVoiceHistoryThread() {
     if (!thread) return;
-    const history = loadVoiceHistory().slice().reverse();
+    const history = loadVoiceHistory();
     showingVoiceHistory = true;
     currentSessionId = '';
     sessionListRenderSignature = '';
