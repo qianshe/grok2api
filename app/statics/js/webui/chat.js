@@ -2,6 +2,7 @@
   const VERIFY_ENDPOINT = '/webui/api/verify';
   const MODELS_ENDPOINT = '/webui/api/models';
   const CHAT_ENDPOINT = '/webui/api/chat/completions';
+  const VOICE_ENDPOINT = '/webui/api/voice/token';
   const PREFERRED_MODEL = 'grok-4.20-0309-non-reasoning';
   const STORE_KEY = 'grok2api_webui_chat_sessions_v1';
   const SIDEBAR_STORE_KEY = 'grok2api_webui_sidebar_collapsed_v1';
@@ -20,6 +21,9 @@
   const statusEl = document.getElementById('status');
   const promptInput = document.getElementById('promptInput');
   const sendBtn = document.getElementById('sendBtn');
+  const inputShell = document.querySelector('.webui-input-shell');
+  const chatVoiceBtn = document.getElementById('chatVoiceBtn');
+  const chatVoiceSelect = document.getElementById('chatVoiceSelect');
   const newChatBtn = document.getElementById('newChatBtn');
   const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
   const sessionList = document.getElementById('sessionList');
@@ -54,6 +58,13 @@
   let showingVoiceHistory = false;
   let voiceSessions = [];
   let currentVoiceSessionId = '';
+  let chatVoiceRoom = null;
+  let chatVoiceConnecting = false;
+  let chatVoiceConnected = false;
+  let chatVoiceAssistantEntry = null;
+  let chatVoiceAssistantKey = '';
+  let chatVoiceLastSentText = '';
+  const chatVoiceAudioElements = new Set();
 
   function text(key, fallback, params) {
     if (typeof window.t !== 'function') return fallback;
@@ -869,6 +880,315 @@
     openVoicePage();
   }
 
+  function currentVoiceMessages() {
+    loadVoiceSessions();
+    const session = currentVoiceSession();
+    if (!session) return [];
+    if (!Array.isArray(session.messages)) session.messages = [];
+    return session.messages;
+  }
+
+  function appendVoiceSessionMessage(role, textValue, options = {}) {
+    const content = String(textValue || '').trim();
+    if (!content) return null;
+    const messagesList = currentVoiceMessages();
+    const id = options.id || `voice_${role}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const existing = messagesList.find((entry) => entry.id === id);
+    if (existing) {
+      existing.text = options.replace ? content : `${existing.text || ''}${content}`;
+      existing.timestamp = Date.now();
+    } else {
+      messagesList.push({ id, role, text: content, partial: Boolean(options.partial), timestamp: Date.now() });
+    }
+    const session = currentVoiceSession();
+    if (session) {
+      session.title = createVoiceSessionTitle(messagesList);
+      session.updatedAt = Date.now();
+    }
+    saveVoiceSessions();
+    renderVoiceHistory();
+    return id;
+  }
+
+  function createChatVoiceBubble(role, textValue) {
+    hideEmpty();
+    const wrapper = document.createElement('article');
+    wrapper.className = `msg ${role}`;
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = role === 'user' ? text('webui.chatkit.userLabel', '你') : 'Grok Voice';
+    const card = document.createElement('div');
+    card.className = `msg-card msg-card-${role}`;
+    card.textContent = textValue || '';
+    wrapper.appendChild(meta);
+    wrapper.appendChild(card);
+    thread.appendChild(wrapper);
+    scrollThread();
+    return { wrapper, card, text: textValue || '' };
+  }
+
+  function appendChatVoiceAssistant(delta, options = {}) {
+    const content = String(delta || '');
+    if (!content && !options.replace) return;
+    if (!chatVoiceAssistantEntry || (options.key !== chatVoiceAssistantKey && chatVoiceAssistantEntry.text)) {
+      chatVoiceAssistantEntry = createChatVoiceBubble('assistant', '');
+    }
+    chatVoiceAssistantKey = options.key || chatVoiceAssistantKey || `voice-assistant-${Date.now()}`;
+    chatVoiceAssistantEntry.text = options.replace ? content : `${chatVoiceAssistantEntry.text || ''}${content}`;
+    chatVoiceAssistantEntry.card.textContent = chatVoiceAssistantEntry.text;
+    appendVoiceSessionMessage('assistant', options.replace ? chatVoiceAssistantEntry.text : content, {
+      id: chatVoiceAssistantKey,
+      replace: Boolean(options.replace),
+      partial: !options.final,
+    });
+    scrollThread();
+  }
+
+  function decodeChatVoicePayload(payload) {
+    try {
+      const raw = typeof payload === 'string' ? payload : new TextDecoder('utf-8').decode(payload);
+      const trimmed = raw.trim();
+      if (!trimmed) return [];
+      try { return [JSON.parse(trimmed)]; } catch {}
+      return trimmed.split(/\n+/).flatMap((line) => {
+        try { return [JSON.parse(line)]; } catch { return []; }
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  function extractVoiceEventText(item) {
+    if (!item || typeof item !== 'object') return '';
+    if (typeof item.transcript === 'string') return item.transcript;
+    if (typeof item.text === 'string') return item.text;
+    if (Array.isArray(item.content)) {
+      return item.content.map((part) => part?.transcript || part?.text || '').filter(Boolean).join('\n');
+    }
+    return '';
+  }
+
+  function handleChatVoiceEvent(event) {
+    const type = String(event?.type || '');
+    if (!type || type === 'ping') return;
+    if (type === 'conversation.item.created') {
+      const item = event.item || {};
+      const role = String(item.role || '').toLowerCase();
+      const content = extractVoiceEventText(item).trim();
+      if (role === 'user' && content && content !== chatVoiceLastSentText) {
+        createChatVoiceBubble('user', content);
+        appendVoiceSessionMessage('user', content, { id: item.id || `voice-user-${Date.now()}` });
+      }
+      return;
+    }
+    if (type === 'response.output_item.added') {
+      chatVoiceAssistantKey = event.item?.id || event.response_id || `voice-assistant-${Date.now()}`;
+      chatVoiceAssistantEntry = createChatVoiceBubble('assistant', '');
+      return;
+    }
+    if (type === 'response.audio_transcript.delta') {
+      appendChatVoiceAssistant(event.delta || '', { key: event.item_id || event.response_id || chatVoiceAssistantKey });
+      return;
+    }
+    if (type === 'response.audio_transcript.done') {
+      appendChatVoiceAssistant(event.transcript || '', {
+        key: event.item_id || event.response_id || chatVoiceAssistantKey,
+        replace: Boolean(event.transcript),
+        final: true,
+      });
+      return;
+    }
+    if (type === 'response.human_assist_turn.commit') {
+      const turn = event.human_assist_turn_response || {};
+      const userText = String(turn.user?.transcript || '').trim();
+      const assistantText = String(turn.assistant?.transcript || '').trim();
+      if (userText) appendVoiceSessionMessage('user', userText, { id: `${event.response_id || Date.now()}:user` });
+      if (assistantText) {
+        appendChatVoiceAssistant(assistantText, {
+          key: event.response_id || chatVoiceAssistantKey,
+          replace: true,
+          final: true,
+        });
+      }
+    }
+  }
+
+  function detachChatVoiceAudio() {
+    chatVoiceAudioElements.forEach((node) => {
+      try {
+        node.pause();
+        node.srcObject = null;
+      } catch {}
+      node.remove();
+    });
+    chatVoiceAudioElements.clear();
+  }
+
+  function addChatVoiceAudioTrack(track) {
+    if (!track || track.kind !== 'audio' || typeof track.attach !== 'function') return;
+    const element = track.attach();
+    element.autoplay = true;
+    element.playsInline = true;
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    chatVoiceAudioElements.add(element);
+  }
+
+  function bindChatVoiceRoomEvents(lk, currentRoom) {
+    currentRoom.on(lk.RoomEvent.TrackSubscribed, addChatVoiceAudioTrack);
+    currentRoom.on(lk.RoomEvent.TrackUnsubscribed, (track) => {
+      try {
+        track.detach().forEach((el) => {
+          chatVoiceAudioElements.delete(el);
+          el.remove();
+        });
+      } catch {}
+    });
+    if (lk.RoomEvent.DataReceived) {
+      currentRoom.on(lk.RoomEvent.DataReceived, (payload) => {
+        decodeChatVoicePayload(payload).forEach(handleChatVoiceEvent);
+      });
+    }
+    currentRoom.on(lk.RoomEvent.Disconnected, () => {
+      chatVoiceConnected = false;
+      chatVoiceRoom = null;
+      detachChatVoiceAudio();
+      renderChatVoiceUi();
+    });
+  }
+
+  function chatVoiceRemoteIdentities() {
+    if (!chatVoiceRoom?.remoteParticipants || typeof chatVoiceRoom.remoteParticipants.values !== 'function') return [];
+    return Array.from(chatVoiceRoom.remoteParticipants.values()).map((participant) => participant.identity).filter(Boolean);
+  }
+
+  async function waitForChatVoiceAgent(timeoutMs = 5000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (chatVoiceRemoteIdentities().length) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return chatVoiceRemoteIdentities().length > 0;
+  }
+
+  async function teardownChatVoiceSession(manual = false) {
+    const currentRoom = chatVoiceRoom;
+    chatVoiceRoom = null;
+    chatVoiceConnected = false;
+    chatVoiceConnecting = false;
+    chatVoiceAssistantEntry = null;
+    chatVoiceAssistantKey = '';
+    try { if (currentRoom) await currentRoom.disconnect(); } catch {}
+    detachChatVoiceAudio();
+    renderChatVoiceUi();
+    if (manual) setStatus(text('webui.chat.voiceEnded', 'Grok Voice 已结束'));
+  }
+
+  async function startChatVoiceSession() {
+    if (chatVoiceConnected) return true;
+    if (chatVoiceConnecting) return false;
+    const lk = getLiveKit();
+    if (!lk || !lk.Room) {
+      toast(text('webui.chatkit.livekitLoadFailed', 'LiveKit SDK 加载失败'), 'error');
+      return false;
+    }
+    persistChatVoicePreference();
+    chatVoiceConnecting = true;
+    renderChatVoiceUi();
+    setStatus(text('webui.chat.voiceConnecting', '正在连接 Grok Voice...'));
+    try {
+      if (lk.setLogLevel && lk.LogLevel) lk.setLogLevel(lk.LogLevel.error);
+    } catch {}
+    try {
+      const headers = await getAuthHeaders();
+      headers['Content-Type'] = 'application/json';
+      const params = new URLSearchParams({
+        voice: selectedChatVoiceId(),
+        personality: 'assistant',
+        speed: '1',
+        instruction: buildVoiceResumeText(),
+      });
+      const res = await fetch(`${VOICE_ENDPOINT}?${params.toString()}`, { headers, cache: 'no-store' });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      if (!payload?.token || !payload?.url) throw new Error(text('webui.chatkit.invalidToken', 'Voice token response invalid'));
+      const currentRoom = new lk.Room({
+        audioCaptureDefaults: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      chatVoiceRoom = currentRoom;
+      bindChatVoiceRoomEvents(lk, currentRoom);
+      let micError = null;
+      const micPromise = currentRoom.localParticipant.setMicrophoneEnabled(true).catch((error) => {
+        micError = error;
+        return null;
+      });
+      await currentRoom.connect(payload.url, payload.token);
+      await micPromise;
+      if (micError) throw micError;
+      chatVoiceConnected = true;
+      setStatus(text('webui.chat.voiceConnected', 'Grok Voice 已连接'));
+      renderChatVoiceUi();
+      return true;
+    } catch (error) {
+      await teardownChatVoiceSession(false);
+      const message = error && error.message ? error.message : String(error);
+      toast(message, 'error');
+      setStatus(`${text('webui.chat.statusFailed', 'Failed')}: ${message}`);
+      return false;
+    } finally {
+      chatVoiceConnecting = false;
+      renderChatVoiceUi();
+    }
+  }
+
+  async function sendChatVoiceText() {
+    if (sending) return;
+    const prompt = (promptInput.value || '').trim();
+    if (!prompt) {
+      toast(text('webui.chat.errors.enterPrompt', 'Please enter a message'), 'error');
+      return;
+    }
+    if (!chatVoiceConnected && !await startChatVoiceSession()) return;
+    const agentReady = await waitForChatVoiceAgent();
+    if (!agentReady) {
+      toast(text('webui.chatkit.agentNotReady', 'Grok Voice Agent 尚未就绪，请稍后再发送'), 'error');
+      return;
+    }
+    chatVoiceLastSentText = prompt;
+    window.setTimeout(() => {
+      if (chatVoiceLastSentText === prompt) chatVoiceLastSentText = '';
+    }, 4000);
+    createChatVoiceBubble('user', prompt);
+    appendVoiceSessionMessage('user', prompt);
+    promptInput.value = '';
+    resizePromptInput();
+    try {
+      const payload = new TextEncoder().encode(prompt);
+      const options = { reliable: true, topic: 'grok.chat' };
+      await chatVoiceRoom.localParticipant.publishData(payload, options);
+      setStatus(text('webui.chat.voiceSent', '已通过 Grok Voice 发送'));
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      toast(message, 'error');
+      setStatus(`${text('webui.chat.errors.requestFailed', 'Request failed')}: ${message}`);
+    }
+  }
+
+  async function restartChatVoiceSessionForVoiceChange() {
+    persistChatVoicePreference();
+    if (!chatVoiceConnected && !chatVoiceConnecting) return;
+    prepareVoiceResumeContext();
+    await teardownChatVoiceSession(false);
+    await startChatVoiceSession();
+  }
+
   function renderVoiceHistoryThread() {
     if (!thread) return;
     const history = loadVoiceHistory().slice().reverse();
@@ -1148,6 +1468,50 @@
     return key ? { Authorization: `Bearer ${key}` } : {};
   }
 
+  function getLiveKit() {
+    return window.LiveKitClient || window.LivekitClient || null;
+  }
+
+  function normalizeVoiceId(value) {
+    const raw = String(value || '').trim();
+    const aliases = {
+      ara: 'Ara',
+      Ara: 'Ara',
+      eve: 'eve',
+      Eve: 'eve',
+      leo: 'leo',
+      Leo: 'leo',
+      rex: 'Grok',
+      Rex: 'Grok',
+      grok: 'Grok',
+      Grok: 'Grok',
+      sal: 'xai_sal',
+      Sal: 'xai_sal',
+      xai_sal: 'xai_sal',
+      gork: 'Gork',
+      Gork: 'Gork',
+    };
+    return aliases[raw] || raw || 'Ara';
+  }
+
+  function selectedChatVoiceId() {
+    return normalizeVoiceId(chatVoiceSelect?.value || localStorage.getItem(VOICE_PREF_KEY) || 'Ara');
+  }
+
+  function persistChatVoicePreference() {
+    try { localStorage.setItem(VOICE_PREF_KEY, selectedChatVoiceId()); } catch {}
+  }
+
+  function restoreChatVoicePreference() {
+    if (!chatVoiceSelect) return;
+    try {
+      const stored = normalizeVoiceId(localStorage.getItem(VOICE_PREF_KEY) || 'Ara');
+      if (Array.from(chatVoiceSelect.options).some((option) => option.value === stored)) {
+        chatVoiceSelect.value = stored;
+      }
+    } catch {}
+  }
+
   async function ensureAccess() {
     const stored = await webuiKey.get();
     if (stored && await verifyKey(VERIFY_ENDPOINT, stored)) return true;
@@ -1180,6 +1544,25 @@
     sendBtn.innerHTML = sending
       ? '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 8H16V16H8Z"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12H19"/><path d="M13 6L19 12L13 18"/></svg>';
+  }
+
+  function renderChatVoiceUi() {
+    inputShell?.classList.toggle('is-voice-mode', chatVoiceConnected);
+    if (chatVoiceBtn) {
+      chatVoiceBtn.classList.toggle('is-live', chatVoiceConnected);
+      chatVoiceBtn.classList.toggle('is-connecting', chatVoiceConnecting);
+      chatVoiceBtn.disabled = chatVoiceConnecting;
+      const label = chatVoiceConnected
+        ? text('webui.chat.voiceDisconnect', '结束 Grok Voice')
+        : text('webui.chat.voiceConnect', '连接 Grok Voice');
+      chatVoiceBtn.setAttribute('aria-label', label);
+      chatVoiceBtn.setAttribute('title', label);
+    }
+    if (promptInput && !sending) {
+      promptInput.placeholder = chatVoiceConnected
+        ? '输入文本，Grok 将以语音回复；也可直接说话'
+        : text('webui.chat.promptPlaceholder', '输入你的问题，Enter 发送，Shift+Enter 换行');
+    }
   }
 
   function setSending(next) {
@@ -2173,8 +2556,10 @@
     if (!await ensureAccess()) return;
     loadSidebarState();
     await loadModels();
+    restoreChatVoicePreference();
     restoreSessions();
     renderVoiceHistory();
+    renderChatVoiceUi();
     resizePromptInput();
     promptInput.focus();
   }
@@ -2191,7 +2576,24 @@
       stopMessage();
       return;
     }
+    if (chatVoiceConnected) {
+      void sendChatVoiceText();
+      return;
+    }
     sendMessage();
+  });
+  chatVoiceBtn?.addEventListener('click', () => {
+    if (chatVoiceConnected) {
+      void teardownChatVoiceSession(true);
+      return;
+    }
+    void startChatVoiceSession();
+  });
+  chatVoiceSelect?.addEventListener('change', () => {
+    void restartChatVoiceSessionForVoiceChange();
+  });
+  window.addEventListener('beforeunload', () => {
+    if (chatVoiceRoom) void chatVoiceRoom.disconnect();
   });
   modelSelect.addEventListener('change', syncCurrentSession);
   systemInput?.addEventListener('change', syncCurrentSession);
@@ -2225,6 +2627,10 @@
   promptInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      if (chatVoiceConnected) {
+        void sendChatVoiceText();
+        return;
+      }
       sendMessage();
     }
   });

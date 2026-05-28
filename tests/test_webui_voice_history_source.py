@@ -17,6 +17,9 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         self.assertIn('id="voiceHistoryList"', html)
         self.assertIn('id="continueVoiceBtn"', html)
         self.assertIn('id="newVoiceSessionBtn"', html)
+        self.assertIn('id="chatVoiceBtn"', html)
+        self.assertIn('id="chatVoiceSelect"', html)
+        self.assertIn('livekit-client@2.11.4', html)
         self.assertIn('/webui/chatkit', html)
 
     def test_chat_js_reads_shared_voice_history_and_renders_continue_action(self):
@@ -32,8 +35,15 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         self.assertIn("function prepareVoiceResumeContext", source)
         self.assertIn("function startNewVoiceSession", source)
         self.assertIn("function deleteVoiceSession", source)
+        self.assertIn("function startChatVoiceSession", source)
+        self.assertIn("function sendChatVoiceText", source)
+        self.assertIn("function restartChatVoiceSessionForVoiceChange", source)
+        self.assertIn("topic: 'grok.chat'", source)
+        self.assertIn("VOICE_ENDPOINT", source)
         self.assertIn("continueVoiceBtn", source)
         self.assertIn("newVoiceSessionBtn", source)
+        self.assertIn("chatVoiceBtn", source)
+        self.assertIn("chatVoiceSelect", source)
         self.assertIn("window.location.href = '/webui/chatkit'", source)
         self.assertIn("VOICE_HISTORY_LIMIT", source)
 
@@ -45,6 +55,8 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         self.assertIn(".webui-voice-history-list", css)
         self.assertIn(".webui-voice-history-item", css)
         self.assertIn(".webui-voice-history-delete", css)
+        self.assertIn(".webui-chat-voice-btn", css)
+        self.assertIn(".webui-input-shell.is-voice-mode .webui-sendbar-model", css)
 
     def test_chatkit_and_chat_share_voice_history_key(self):
         chat_source = CHAT_JS.read_text(encoding="utf-8")
