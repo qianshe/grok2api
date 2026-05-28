@@ -21,6 +21,9 @@ class ChatkitUiSourceTests(unittest.TestCase):
         self.assertIn('<textarea id="instructionInput"', html)
         self.assertIn('id="saveCustomPersonalityBtn"', html)
         self.assertIn('id="deleteCustomPersonalityBtn"', html)
+        self.assertIn('value="Ara" selected>Ara</option>', html)
+        self.assertIn('value="Grok">Rex</option>', html)
+        self.assertIn('value="xai_sal">Sal</option>', html)
 
     def test_chatkit_custom_personality_uses_persisted_instruction_entries(self):
         source = CHATKIT_JS.read_text(encoding="utf-8")

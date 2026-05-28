@@ -23,13 +23,13 @@ _WS_PARAMS: Dict[str, str] = {
 
 
 def build_token_request_payload(
-    voice:              str   = "ara",
+    voice:              str   = "Ara",
     personality:        str   = "assistant",
     speed:              float = 1.0,
     custom_instruction: str   = "",
 ) -> bytes:
     """Return the JSON body for POST /rest/livekit/tokens."""
-    voice_id = str(voice or "ara").strip() or "ara"
+    voice_id = str(voice or "Ara").strip() or "Ara"
     payload_dict = {
         "voice":           voice_id,
         "personality":     None,

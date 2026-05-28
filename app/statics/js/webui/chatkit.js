@@ -627,7 +627,28 @@
     }
   };
 
-  const selectedVoiceId = () => String(voiceSelect?.value || 'ara').trim() || 'ara';
+  const normalizeVoiceId = (value) => {
+    const raw = String(value || '').trim();
+    const aliases = {
+      ara: 'Ara',
+      Ara: 'Ara',
+      eve: 'eve',
+      Eve: 'eve',
+      leo: 'leo',
+      Leo: 'leo',
+      rex: 'Grok',
+      Rex: 'Grok',
+      Grok: 'Grok',
+      sal: 'xai_sal',
+      Sal: 'xai_sal',
+      xai_sal: 'xai_sal',
+      gork: 'Gork',
+      Gork: 'Gork',
+    };
+    return aliases[raw] || raw || 'Ara';
+  };
+
+  const selectedVoiceId = () => normalizeVoiceId(voiceSelect?.value || 'Ara');
 
   const normalizeCustomPersonality = (entry) => {
     const id = String(entry?.id || '').trim();
@@ -744,8 +765,9 @@
     if (!voiceSelect) return;
     try {
       const stored = String(localStorage.getItem(VOICE_PREF_KEY) || '').trim();
-      if (stored && Array.from(voiceSelect.options).some((option) => option.value === stored)) {
-        voiceSelect.value = stored;
+      const normalized = normalizeVoiceId(stored);
+      if (normalized && Array.from(voiceSelect.options).some((option) => option.value === normalized)) {
+        voiceSelect.value = normalized;
       }
     } catch {}
   };

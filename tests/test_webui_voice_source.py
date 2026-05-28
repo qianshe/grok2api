@@ -20,6 +20,8 @@ class WebuiVoiceSourceTests(unittest.TestCase):
         self.assertIn("voice account reserved via voice-capability path", source)
         self.assertNotIn("No available accounts with AUTO quota for Grok Voice", source)
         self.assertNotIn("voice account reserved via no-quota fallback", source)
+        self.assertIn('voice: str = "Ara"', source)
+        self.assertIn('async def voice_token_get(\n    voice: str = "Ara",', source)
 
     def test_voice_input_audio_endpoint_does_not_use_paid_or_local_tts(self):
         source = VOICE_PY.read_text(encoding="utf-8")

@@ -43,7 +43,7 @@ class VoiceTokenResponse(BaseModel):
 
 
 class VoiceTokenRequest(BaseModel):
-    voice: str = "ara"
+    voice: str = "Ara"
     personality: str = "assistant"
     speed: float = 1.0
     instruction: str = ""
@@ -70,7 +70,7 @@ async def _issue_voice_token(
     )
     if acct is None:
         raise RateLimitError("No available tokens for voice mode")
-    logger.info("voice account reserved via voice-capability path")
+    logger.info("voice account reserved via voice-capability path: token_prefix={}...", token[:8])
 
     token = acct.token
     try:
@@ -111,7 +111,7 @@ async def _issue_voice_token(
 
 @protected_router.get("/voice/token", response_model=VoiceTokenResponse)
 async def voice_token_get(
-    voice: str = "ara",
+    voice: str = "Ara",
     personality: str = "assistant",
     speed: float = 1.0,
     instruction: str = "",
