@@ -22,8 +22,11 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         source = CHAT_JS.read_text(encoding="utf-8")
 
         self.assertIn("const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history'", source)
+        self.assertIn("const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context'", source)
         self.assertIn("function loadVoiceHistory", source)
         self.assertIn("function renderVoiceHistory", source)
+        self.assertIn("function renderVoiceHistoryThread", source)
+        self.assertIn("function prepareVoiceResumeContext", source)
         self.assertIn("continueVoiceBtn", source)
         self.assertIn("window.location.href = '/webui/chatkit'", source)
         self.assertIn("VOICE_HISTORY_LIMIT", source)
@@ -42,6 +45,10 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
 
         self.assertIn("const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history'", chat_source)
         self.assertIn("const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history'", chatkit_source)
+        self.assertIn("const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context'", chat_source)
+        self.assertIn("const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context'", chatkit_source)
+        self.assertIn("selectedSessionInstruction", chatkit_source)
+        self.assertIn("consumeVoiceResumeContext", chatkit_source)
 
 
 if __name__ == "__main__":

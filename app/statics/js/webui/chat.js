@@ -7,6 +7,7 @@
   const SIDEBAR_STORE_KEY = 'grok2api_webui_sidebar_collapsed_v1';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
   const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
+  const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context';
   const VOICE_HISTORY_LIMIT = 8;
   const READ_ALOUD_ENABLED = false;
 
@@ -48,6 +49,7 @@
   const PROMPT_MAX_HEIGHT = 108;
   let pendingThreadScrollFrame = 0;
   let sessionListRenderSignature = '';
+  let showingVoiceHistory = false;
 
   function text(key, fallback, params) {
     if (typeof window.t !== 'function') return fallback;
@@ -720,10 +722,84 @@
 
       item.appendChild(meta);
       item.appendChild(body);
-      item.addEventListener('click', openVoicePage);
+      item.addEventListener('click', renderVoiceHistoryThread);
       fragment.appendChild(item);
     });
     voiceHistoryList.replaceChildren(fragment);
+  }
+
+  function buildVoiceResumeText() {
+    const history = loadVoiceHistory().slice().reverse();
+    return history
+      .map((entry) => `${entry.role === 'user' ? '用户' : 'Grok'}: ${entry.text}`)
+      .join('\n')
+      .slice(-3000);
+  }
+
+  function prepareVoiceResumeContext() {
+    const transcript = buildVoiceResumeText();
+    if (!transcript) return;
+    try {
+      localStorage.setItem(VOICE_RESUME_CONTEXT_KEY, JSON.stringify({
+        createdAt: Date.now(),
+        transcript,
+      }));
+    } catch {}
+  }
+
+  function continueVoiceConversation() {
+    prepareVoiceResumeContext();
+    openVoicePage();
+  }
+
+  function renderVoiceHistoryThread() {
+    if (!thread) return;
+    const history = loadVoiceHistory().slice().reverse();
+    showingVoiceHistory = true;
+    currentSessionId = '';
+    sessionListRenderSignature = '';
+    renderSessionList();
+    thread.innerHTML = '';
+    hideEmpty();
+
+    const header = document.createElement('section');
+    header.className = 'webui-voice-history-thread-head';
+    const title = document.createElement('div');
+    title.className = 'webui-voice-history-thread-title';
+    title.textContent = 'Voice History';
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'webui-voice-history-thread-action';
+    action.textContent = text('webui.chat.voiceHistoryContinue', '继续语音');
+    action.addEventListener('click', continueVoiceConversation);
+    header.appendChild(title);
+    header.appendChild(action);
+    thread.appendChild(header);
+
+    if (!history.length) {
+      const empty = document.createElement('div');
+      empty.className = 'webui-voice-history-thread-empty';
+      empty.textContent = text('webui.chat.voiceHistoryEmpty', '暂无语音记录');
+      thread.appendChild(empty);
+      return;
+    }
+
+    history.forEach((entry) => {
+      const wrapper = document.createElement('article');
+      wrapper.className = `msg ${entry.role}`;
+      const meta = document.createElement('div');
+      meta.className = 'msg-meta';
+      const role = entry.role === 'user' ? text('webui.chatkit.userLabel', '你') : 'Grok';
+      const timeValue = formatVoiceHistoryTime(entry.timestamp);
+      meta.textContent = timeValue ? `${role} · ${timeValue}` : role;
+      const card = document.createElement('div');
+      card.className = 'msg-card';
+      card.textContent = entry.text;
+      wrapper.appendChild(meta);
+      wrapper.appendChild(card);
+      thread.appendChild(wrapper);
+    });
+    scrollThread();
   }
 
   function createSessionTitle(messagesList) {
@@ -1600,6 +1676,7 @@
   function switchSession(id) {
     const session = sessions.find((item) => item.id === id);
     if (!session) return;
+    showingVoiceHistory = false;
     currentSessionId = session.id;
     messages = session.messages;
     pendingFiles = [];
@@ -1619,6 +1696,7 @@
 
   function startNewSession() {
     const session = createSession();
+    showingVoiceHistory = false;
     sessions.unshift(session);
     currentSessionId = session.id;
     messages = session.messages;
@@ -1986,7 +2064,7 @@
 
   newChatBtn?.addEventListener('click', startNewSession);
   sidebarToggleBtn.addEventListener('click', toggleSidebar);
-  continueVoiceBtn?.addEventListener('click', openVoicePage);
+  continueVoiceBtn?.addEventListener('click', continueVoiceConversation);
   window.addEventListener('storage', (event) => {
     if (event.key === VOICE_HISTORY_KEY) renderVoiceHistory();
   });

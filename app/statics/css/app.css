@@ -529,6 +529,18 @@ button{cursor:pointer}
   -webkit-box-orient:vertical;overflow:hidden;word-break:break-word
 }
 .webui-voice-history-item-assistant .webui-voice-history-body{color:#4d4942}
+.webui-voice-history-thread-head{
+  width:min(100%,860px);margin:0 auto 18px;padding:14px 16px;border-radius:18px;
+  background:#f1ece2;display:flex;align-items:center;justify-content:space-between;gap:12px
+}
+.webui-voice-history-thread-title{font-size:16px;font-weight:800;color:#181614;letter-spacing:-.03em}
+.webui-voice-history-thread-action{
+  height:30px;padding:0 12px;border-radius:999px;background:#171511;color:#fff;font-size:12px;font-weight:700;white-space:nowrap
+}
+.webui-voice-history-thread-empty{
+  width:min(100%,860px);margin:0 auto;padding:28px 16px;border-radius:18px;background:#f6f2ea;
+  color:#8c8579;text-align:center;font-size:13px
+}
 .webui-sidebar-settings{
   display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:8px;align-content:start;padding:0 8px 2px 12px
 }

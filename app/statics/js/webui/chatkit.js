@@ -2,6 +2,7 @@
   const VOICE_ENDPOINT = '/webui/api/voice/token';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
   const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
+  const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context';
   const PERSONALITY_PREF_KEY = 'grok2api_voice_personality';
   const CUSTOM_PERSONALITIES_KEY = 'grok2api_voice_custom_personalities';
   const CUSTOM_DRAFT_KEY = 'grok2api_voice_custom_draft';
@@ -719,6 +720,32 @@
     return isCustomPersonality() ? String(instructionInput?.value || '').trim() : '';
   };
 
+  const consumeVoiceResumeContext = () => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(VOICE_RESUME_CONTEXT_KEY) || '{}');
+      localStorage.removeItem(VOICE_RESUME_CONTEXT_KEY);
+      const ageMs = Date.now() - Number(parsed?.createdAt || 0);
+      const transcript = String(parsed?.transcript || '').trim();
+      return transcript && ageMs >= 0 && ageMs < 24 * 60 * 60 * 1000 ? transcript : '';
+    } catch {
+      try { localStorage.removeItem(VOICE_RESUME_CONTEXT_KEY); } catch {}
+      return '';
+    }
+  };
+
+  const selectedSessionInstruction = () => {
+    const baseInstruction = selectedCustomInstruction();
+    const resumeTranscript = consumeVoiceResumeContext();
+    if (!resumeTranscript) return baseInstruction;
+    const resumeInstruction = [
+      'Continue the previous Grok Voice conversation using this recent transcript as context.',
+      `Keep the selected voice personality: ${selectedPersonality()}.`,
+      'Recent transcript:',
+      resumeTranscript,
+    ].join('\n');
+    return baseInstruction ? `${baseInstruction}\n\n${resumeInstruction}` : resumeInstruction;
+  };
+
   const selectedCustomPersonalityName = () => {
     const saved = selectedCustomPersonality();
     if (saved) return saved.name;
@@ -1214,7 +1241,7 @@
         voice: selectedVoiceId(),
         personality: selectedPersonality(),
         speed: speedSelect?.value || '1',
-        instruction: selectedCustomInstruction(),
+        instruction: selectedSessionInstruction(),
       });
       const res = await fetch(`${VOICE_ENDPOINT}?${params.toString()}`, {
         headers,

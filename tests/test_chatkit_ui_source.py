@@ -43,7 +43,7 @@ class ChatkitUiSourceTests(unittest.TestCase):
         self.assertIn("saveSelectedCustomPersonality", source)
         self.assertIn("deleteSelectedCustomPersonality", source)
         self.assertIn("personality: selectedPersonality(),", source)
-        self.assertIn("instruction: selectedCustomInstruction(),", source)
+        self.assertIn("instruction: selectedSessionInstruction(),", source)
         self.assertIn("renderInstructionVisibility", source)
         self.assertIn("controlIcon.endSession", source)
         self.assertNotIn("ROLE_PRESETS", source)
