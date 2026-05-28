@@ -24,6 +24,11 @@ class ChatkitUiSourceTests(unittest.TestCase):
         self.assertIn('value="Ara" selected>Ara</option>', html)
         self.assertIn('value="Grok">Rex</option>', html)
         self.assertIn('value="xai_sal">Sal</option>', html)
+        self.assertIn('助手 Assistant', html)
+        self.assertIn('治疗师 &quot;Therapist&quot;', html)
+        self.assertIn('value="kids-trivia">儿童问答 Kids Trivia Game</option>', html)
+        self.assertIn('放飞 Unhinged · 18+', html)
+        self.assertIn('浪漫 Romantic · 18+', html)
 
     def test_chatkit_custom_personality_uses_persisted_instruction_entries(self):
         source = CHATKIT_JS.read_text(encoding="utf-8")
