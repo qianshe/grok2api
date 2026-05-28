@@ -7,6 +7,7 @@
   const SIDEBAR_STORE_KEY = 'grok2api_webui_sidebar_collapsed_v1';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
   const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
+  const VOICE_SESSIONS_KEY = 'grok2api_voice_sessions_v1';
   const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context';
   const VOICE_HISTORY_LIMIT = 8;
   const READ_ALOUD_ENABLED = false;
@@ -24,6 +25,7 @@
   const sessionList = document.getElementById('sessionList');
   const voiceHistoryList = document.getElementById('voiceHistoryList');
   const continueVoiceBtn = document.getElementById('continueVoiceBtn');
+  const newVoiceSessionBtn = document.getElementById('newVoiceSessionBtn');
   const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('fileInput');
   const uploadMeta = document.getElementById('uploadMeta');
@@ -50,6 +52,8 @@
   let pendingThreadScrollFrame = 0;
   let sessionListRenderSignature = '';
   let showingVoiceHistory = false;
+  let voiceSessions = [];
+  let currentVoiceSessionId = '';
 
   function text(key, fallback, params) {
     if (typeof window.t !== 'function') return fallback;
@@ -665,22 +669,116 @@
     window.location.href = '/webui/chatkit';
   }
 
-  function loadVoiceHistory() {
+  function normalizeVoiceMessage(message) {
+    return {
+      id: String(message && message.id || '').trim(),
+      role: message && ['user', 'assistant'].includes(message.role) ? message.role : 'system',
+      text: String(message && message.text || '').trim(),
+      timestamp: Number(message && message.timestamp) || 0,
+    };
+  }
+
+  function createVoiceSessionTitle(items) {
+    const first = (items || []).find((item) => item && item.role === 'user' && String(item.text || '').trim());
+    const raw = String(first && first.text || '').trim().replace(/\s+/g, ' ');
+    if (!raw) return 'Voice Session';
+    return raw.length > 24 ? `${raw.slice(0, 24)}...` : raw;
+  }
+
+  function createVoiceSession(messagesList = []) {
+    return {
+      id: `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      title: createVoiceSessionTitle(messagesList),
+      messages: messagesList,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function normalizeVoiceSession(item) {
+    const messagesList = Array.isArray(item && item.messages)
+      ? item.messages.map(normalizeVoiceMessage).filter((message) => message.id && message.text)
+      : [];
+    return {
+      id: String(item && item.id || '').trim() || `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      title: String(item && item.title || '').trim() || createVoiceSessionTitle(messagesList),
+      messages: messagesList,
+      updatedAt: Number(item && item.updatedAt) || Date.now(),
+    };
+  }
+
+  function saveVoiceSessions() {
     try {
-      const raw = JSON.parse(localStorage.getItem(VOICE_HISTORY_KEY) || '[]');
-      if (!Array.isArray(raw)) return [];
-      return raw
-        .map((item) => ({
-          role: item && ['user', 'assistant'].includes(item.role) ? item.role : 'system',
-          text: String(item && item.text || '').trim(),
-          timestamp: Number(item && item.timestamp) || 0,
-        }))
-        .filter((item) => item.text && item.role !== 'system')
-        .slice(-VOICE_HISTORY_LIMIT)
-        .reverse();
+      localStorage.setItem(VOICE_SESSIONS_KEY, JSON.stringify({
+        currentSessionId: currentVoiceSessionId,
+        sessions: voiceSessions,
+      }));
+      const current = currentVoiceSession();
+      localStorage.setItem(VOICE_HISTORY_KEY, JSON.stringify(current ? current.messages : []));
+    } catch {}
+  }
+
+  function loadVoiceSessions() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(VOICE_SESSIONS_KEY) || '{}');
+      voiceSessions = Array.isArray(parsed && parsed.sessions)
+        ? parsed.sessions.map(normalizeVoiceSession)
+        : [];
+      currentVoiceSessionId = String(parsed && parsed.currentSessionId || '').trim();
     } catch {
-      return [];
+      voiceSessions = [];
+      currentVoiceSessionId = '';
     }
+
+    if (!voiceSessions.length) {
+      try {
+        const legacy = JSON.parse(localStorage.getItem(VOICE_HISTORY_KEY) || '[]');
+        const legacyMessages = Array.isArray(legacy)
+          ? legacy.map(normalizeVoiceMessage).filter((message) => message.id && message.text)
+          : [];
+        voiceSessions = [createVoiceSession(legacyMessages)];
+      } catch {
+        voiceSessions = [createVoiceSession()];
+      }
+      currentVoiceSessionId = voiceSessions[0].id;
+      saveVoiceSessions();
+    }
+    if (!voiceSessions.some((session) => session.id === currentVoiceSessionId)) {
+      currentVoiceSessionId = voiceSessions[0].id;
+    }
+  }
+
+  function currentVoiceSession() {
+    return voiceSessions.find((session) => session.id === currentVoiceSessionId) || null;
+  }
+
+  function loadVoiceHistory(sessionId = currentVoiceSessionId) {
+    loadVoiceSessions();
+    const session = voiceSessions.find((item) => item.id === sessionId) || currentVoiceSession();
+    const raw = session ? session.messages : [];
+    return raw
+      .map(normalizeVoiceMessage)
+      .filter((item) => item.text && item.role !== 'system');
+  }
+
+  function startNewVoiceSession() {
+    const session = createVoiceSession();
+    voiceSessions.unshift(session);
+    currentVoiceSessionId = session.id;
+    saveVoiceSessions();
+    renderVoiceHistory();
+    renderVoiceHistoryThread();
+  }
+
+  function deleteVoiceSession(sessionId) {
+    loadVoiceSessions();
+    voiceSessions = voiceSessions.filter((session) => session.id !== sessionId);
+    if (!voiceSessions.length) voiceSessions = [createVoiceSession()];
+    if (!voiceSessions.some((session) => session.id === currentVoiceSessionId)) {
+      currentVoiceSessionId = voiceSessions[0].id;
+    }
+    saveVoiceSessions();
+    renderVoiceHistory();
+    renderVoiceHistoryThread();
   }
 
   function formatVoiceHistoryTime(timestamp) {
@@ -697,32 +795,51 @@
 
   function renderVoiceHistory() {
     if (!voiceHistoryList) return;
-    const history = loadVoiceHistory();
+    loadVoiceSessions();
+    const visibleSessions = voiceSessions.slice(0, VOICE_HISTORY_LIMIT);
     voiceHistoryList.dataset.empty = text('webui.chat.voiceHistoryEmpty', '暂无语音记录');
-    if (!history.length) {
+    if (!visibleSessions.length) {
       voiceHistoryList.replaceChildren();
       return;
     }
 
     const fragment = document.createDocumentFragment();
-    history.forEach((entry) => {
+    visibleSessions.forEach((session) => {
       const item = document.createElement('button');
       item.type = 'button';
-      item.className = `webui-voice-history-item webui-voice-history-item-${entry.role}`;
+      item.className = `webui-voice-history-item${session.id === currentVoiceSessionId ? ' active' : ''}`;
 
       const meta = document.createElement('div');
       meta.className = 'webui-voice-history-meta';
-      const role = entry.role === 'user' ? text('webui.chatkit.userLabel', '你') : 'Grok';
-      const timeValue = formatVoiceHistoryTime(entry.timestamp);
-      meta.textContent = timeValue ? `${role} · ${timeValue}` : role;
+      const timeValue = formatVoiceHistoryTime(session.updatedAt);
+      const count = (session.messages || []).filter((entry) => entry.role === 'user' || entry.role === 'assistant').length;
+      meta.textContent = [timeValue, `${count} 条`].filter(Boolean).join(' · ');
 
       const body = document.createElement('div');
       body.className = 'webui-voice-history-body';
-      body.textContent = entry.text;
+      body.textContent = session.title || createVoiceSessionTitle(session.messages);
+
+      const actions = document.createElement('div');
+      actions.className = 'webui-voice-history-row-actions';
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'webui-voice-history-delete';
+      deleteBtn.textContent = '删除';
+      deleteBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        deleteVoiceSession(session.id);
+      });
+      actions.appendChild(deleteBtn);
 
       item.appendChild(meta);
       item.appendChild(body);
-      item.addEventListener('click', renderVoiceHistoryThread);
+      item.appendChild(actions);
+      item.addEventListener('click', () => {
+        currentVoiceSessionId = session.id;
+        saveVoiceSessions();
+        renderVoiceHistory();
+        renderVoiceHistoryThread();
+      });
       fragment.appendChild(item);
     });
     voiceHistoryList.replaceChildren(fragment);
@@ -2065,8 +2182,9 @@
   newChatBtn?.addEventListener('click', startNewSession);
   sidebarToggleBtn.addEventListener('click', toggleSidebar);
   continueVoiceBtn?.addEventListener('click', continueVoiceConversation);
+  newVoiceSessionBtn?.addEventListener('click', startNewVoiceSession);
   window.addEventListener('storage', (event) => {
-    if (event.key === VOICE_HISTORY_KEY) renderVoiceHistory();
+    if (event.key === VOICE_HISTORY_KEY || event.key === VOICE_SESSIONS_KEY) renderVoiceHistory();
   });
   sendBtn.addEventListener('click', () => {
     if (sending) {

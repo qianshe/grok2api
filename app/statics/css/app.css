@@ -520,15 +520,18 @@ button{cursor:pointer}
 }
 .webui-voice-history-item{
   min-height:42px;border-radius:10px;padding:7px 10px;background:transparent;color:#2d2c29;
-  text-align:left;display:grid;gap:3px
+  text-align:left;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 6px;align-items:center
 }
 .webui-voice-history-item:hover{background:#efeeea}
+.webui-voice-history-item.active{background:#ece9e1}
 .webui-voice-history-meta{font-size:10px;font-weight:700;color:#8b867d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .webui-voice-history-body{
-  font-size:12px;line-height:1.35;color:#2d2c29;display:-webkit-box;-webkit-line-clamp:2;
+  font-size:12px;line-height:1.35;color:#2d2c29;display:-webkit-box;-webkit-line-clamp:2;grid-column:1;
   -webkit-box-orient:vertical;overflow:hidden;word-break:break-word
 }
-.webui-voice-history-item-assistant .webui-voice-history-body{color:#4d4942}
+.webui-voice-history-row-actions{grid-column:2;grid-row:1 / span 2;opacity:0;transition:opacity .15s}
+.webui-voice-history-item:hover .webui-voice-history-row-actions,.webui-voice-history-item.active .webui-voice-history-row-actions{opacity:1}
+.webui-voice-history-delete{height:22px;padding:0 7px;border-radius:999px;background:#f2e8df;color:#8b3f32;font-size:10px;font-weight:700}
 .webui-voice-history-thread-head{
   width:min(100%,860px);margin:0 auto 18px;padding:14px 16px;border-radius:18px;
   background:#f1ece2;display:flex;align-items:center;justify-content:space-between;gap:12px

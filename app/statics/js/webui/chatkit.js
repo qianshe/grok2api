@@ -2,6 +2,7 @@
   const VOICE_ENDPOINT = '/webui/api/voice/token';
   const VOICE_PREF_KEY = 'grok2api_voice_id';
   const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history';
+  const VOICE_SESSIONS_KEY = 'grok2api_voice_sessions_v1';
   const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context';
   const PERSONALITY_PREF_KEY = 'grok2api_voice_personality';
   const CUSTOM_PERSONALITIES_KEY = 'grok2api_voice_custom_personalities';
@@ -44,6 +45,8 @@
   let chatkitMessageSeq = 0;
   let chatkitSending = false;
   let customPersonalities = [];
+  let voiceSessions = [];
+  let currentVoiceSessionId = '';
   const chatkitMessages = [];
   const realtimeMessageByItemId = new Map();
   let lastRealtimeItemId = null;
@@ -132,22 +135,114 @@
     return message;
   };
 
+  const serializeChatkitMessages = () => chatkitMessages.slice(-200).map((message) => ({
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    partial: Boolean(message.partial),
+    timestamp: message.timestamp,
+  }));
+
+  const createVoiceSessionTitle = (items) => {
+    const first = (items || []).find((item) => item?.role === 'user' && String(item.text || '').trim());
+    const raw = String(first?.text || '').trim().replace(/\s+/g, ' ');
+    if (!raw) return 'Voice Session';
+    return raw.length > 24 ? `${raw.slice(0, 24)}...` : raw;
+  };
+
+  const createVoiceSession = (messages = []) => ({
+    id: `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    title: createVoiceSessionTitle(messages),
+    messages,
+    updatedAt: Date.now(),
+  });
+
+  const normalizeVoiceSession = (item) => {
+    const messages = Array.isArray(item?.messages) ? item.messages
+      .map((message) => ({
+        id: String(message?.id || '').trim(),
+        role: message?.role === 'user' || message?.role === 'assistant' ? message.role : 'system',
+        text: String(message?.text || '').trim(),
+        partial: Boolean(message?.partial),
+        timestamp: Number(message?.timestamp || Date.now()),
+      }))
+      .filter((message) => message.id && message.text)
+      : [];
+    return {
+      id: String(item?.id || '').trim() || `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      title: String(item?.title || '').trim() || createVoiceSessionTitle(messages),
+      messages,
+      updatedAt: Number(item?.updatedAt || Date.now()),
+    };
+  };
+
+  const saveVoiceSessions = () => {
+    try {
+      localStorage.setItem(VOICE_SESSIONS_KEY, JSON.stringify({
+        currentSessionId: currentVoiceSessionId,
+        sessions: voiceSessions,
+      }));
+    } catch {}
+  };
+
+  const loadVoiceSessions = () => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(VOICE_SESSIONS_KEY) || '{}');
+      voiceSessions = Array.isArray(parsed?.sessions) ? parsed.sessions.map(normalizeVoiceSession) : [];
+      currentVoiceSessionId = String(parsed?.currentSessionId || '').trim();
+    } catch {
+      voiceSessions = [];
+      currentVoiceSessionId = '';
+    }
+    if (!voiceSessions.length) {
+      try {
+        const legacy = JSON.parse(localStorage.getItem(VOICE_HISTORY_KEY) || '[]');
+        const messages = Array.isArray(legacy) ? legacy
+          .map((message) => ({
+            id: String(message?.id || '').trim(),
+            role: message?.role === 'user' || message?.role === 'assistant' ? message.role : 'system',
+            text: String(message?.text || '').trim(),
+            partial: Boolean(message?.partial),
+            timestamp: Number(message?.timestamp || Date.now()),
+          }))
+          .filter((message) => message.id && message.text)
+          : [];
+        voiceSessions = [createVoiceSession(messages)];
+      } catch {
+        voiceSessions = [createVoiceSession()];
+      }
+      currentVoiceSessionId = voiceSessions[0].id;
+      saveVoiceSessions();
+    }
+    if (!voiceSessions.some((session) => session.id === currentVoiceSessionId)) {
+      currentVoiceSessionId = voiceSessions[0].id;
+    }
+  };
+
+  const currentVoiceSession = () => voiceSessions.find((session) => session.id === currentVoiceSessionId) || null;
+
   const persistChatkitMessages = () => {
     try {
-      const payload = chatkitMessages.slice(-200).map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        partial: Boolean(message.partial),
-        timestamp: message.timestamp,
-      }));
+      const payload = serializeChatkitMessages();
+      let session = currentVoiceSession();
+      if (!session) {
+        session = createVoiceSession(payload);
+        voiceSessions.unshift(session);
+        currentVoiceSessionId = session.id;
+      }
+      session.messages = payload;
+      session.title = createVoiceSessionTitle(payload);
+      session.updatedAt = Date.now();
+      voiceSessions = [session, ...voiceSessions.filter((item) => item.id !== session.id)];
+      saveVoiceSessions();
       localStorage.setItem(VOICE_HISTORY_KEY, JSON.stringify(payload));
     } catch {}
   };
 
   const loadChatkitMessages = () => {
     try {
-      const raw = JSON.parse(localStorage.getItem(VOICE_HISTORY_KEY) || '[]');
+      loadVoiceSessions();
+      const raw = currentVoiceSession()?.messages || [];
       if (!Array.isArray(raw)) return;
       chatkitMessages.splice(0, chatkitMessages.length, ...raw
         .map((item) => ({
@@ -163,6 +258,17 @@
         return match ? Math.max(max, Number(match[1]) || 0) : max;
       }, chatkitMessageSeq);
     } catch {}
+  };
+
+  const startNewVoiceSession = () => {
+    const session = createVoiceSession();
+    voiceSessions.unshift(session);
+    currentVoiceSessionId = session.id;
+    chatkitMessages.splice(0, chatkitMessages.length);
+    chatkitMessageSeq = 0;
+    saveVoiceSessions();
+    try { localStorage.setItem(VOICE_HISTORY_KEY, JSON.stringify([])); } catch {}
+    renderChatkitMessages();
   };
 
   const appendChatkitMessage = (role, content, options = {}) => upsertChatkitMessage(
@@ -946,7 +1052,7 @@
       muteVoiceBtn.setAttribute('title', label);
     }
     if (newSessionBtn) {
-      newSessionBtn.disabled = !connected;
+      newSessionBtn.disabled = false;
       const label = connected
         ? text('webui.chatkit.endSession', '结束会话')
         : text('webui.chatkit.newSession', '新会话');
@@ -1369,8 +1475,11 @@
   });
   muteVoiceBtn?.addEventListener('click', toggleOutputMute);
   newSessionBtn?.addEventListener('click', () => {
-    if (!room) return;
-    void teardownSession(true);
+    if (room) {
+      void teardownSession(true);
+      return;
+    }
+    startNewVoiceSession();
   });
 
   window.addEventListener('beforeunload', () => {

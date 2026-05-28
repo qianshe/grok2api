@@ -16,18 +16,24 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         self.assertIn('id="voiceHistorySection"', html)
         self.assertIn('id="voiceHistoryList"', html)
         self.assertIn('id="continueVoiceBtn"', html)
+        self.assertIn('id="newVoiceSessionBtn"', html)
         self.assertIn('/webui/chatkit', html)
 
     def test_chat_js_reads_shared_voice_history_and_renders_continue_action(self):
         source = CHAT_JS.read_text(encoding="utf-8")
 
         self.assertIn("const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history'", source)
+        self.assertIn("const VOICE_SESSIONS_KEY = 'grok2api_voice_sessions_v1'", source)
         self.assertIn("const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context'", source)
         self.assertIn("function loadVoiceHistory", source)
+        self.assertIn("function loadVoiceSessions", source)
         self.assertIn("function renderVoiceHistory", source)
         self.assertIn("function renderVoiceHistoryThread", source)
         self.assertIn("function prepareVoiceResumeContext", source)
+        self.assertIn("function startNewVoiceSession", source)
+        self.assertIn("function deleteVoiceSession", source)
         self.assertIn("continueVoiceBtn", source)
+        self.assertIn("newVoiceSessionBtn", source)
         self.assertIn("window.location.href = '/webui/chatkit'", source)
         self.assertIn("VOICE_HISTORY_LIMIT", source)
 
@@ -38,6 +44,7 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
         self.assertIn("overflow-y:auto", css)
         self.assertIn(".webui-voice-history-list", css)
         self.assertIn(".webui-voice-history-item", css)
+        self.assertIn(".webui-voice-history-delete", css)
 
     def test_chatkit_and_chat_share_voice_history_key(self):
         chat_source = CHAT_JS.read_text(encoding="utf-8")
@@ -45,6 +52,8 @@ class WebuiVoiceHistorySourceTests(unittest.TestCase):
 
         self.assertIn("const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history'", chat_source)
         self.assertIn("const VOICE_HISTORY_KEY = 'grok2api_voice_chat_history'", chatkit_source)
+        self.assertIn("const VOICE_SESSIONS_KEY = 'grok2api_voice_sessions_v1'", chat_source)
+        self.assertIn("const VOICE_SESSIONS_KEY = 'grok2api_voice_sessions_v1'", chatkit_source)
         self.assertIn("const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context'", chat_source)
         self.assertIn("const VOICE_RESUME_CONTEXT_KEY = 'grok2api_voice_resume_context'", chatkit_source)
         self.assertIn("selectedSessionInstruction", chatkit_source)
